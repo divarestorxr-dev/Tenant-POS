@@ -90,10 +90,6 @@ router.get("/mall-units", async (req, res) => {
   try {
     const siteId = req.siteId;
     const unitSiteFilter = siteId > 0 ? eq(mallUnitsTable.siteId, siteId) : undefined;
-    const units = await db.select().from(mallUnitsTable)
-      .where(unitSiteFilter)
-      .orderBy(mallUnitsTable.positionY, mallUnitsTable.positionX);
-
     const todayStr = today();
 
     const bookingConditions: any[] = [
@@ -102,40 +98,46 @@ router.get("/mall-units", async (req, res) => {
     ];
     if (siteId > 0) bookingConditions.push(eq(tenantBookingsTable.siteId, siteId));
 
-    const bookings = await db
-      .select({
-        id: tenantBookingsTable.id,
-        unitCode: tenantBookingsTable.unitCode,
-        tenantId: tenantBookingsTable.tenantId,
-        contractStatus: tenantBookingsTable.contractStatus,
-        paymentStatus: tenantBookingsTable.paymentStatus,
-        startDate: tenantBookingsTable.startDate,
-        endDate: tenantBookingsTable.endDate,
-        dueDate: tenantBookingsTable.dueDate,
-        periodLabel: tenantBookingsTable.periodLabel,
-        totalAmount: tenantBookingsTable.totalAmount,
-        paidAmount: tenantBookingsTable.paidAmount,
-        remainingAmount: tenantBookingsTable.remainingAmount,
-      })
-      .from(tenantBookingsTable)
-      .where(and(...bookingConditions));
-
     const tenantSiteFilter = siteId > 0 ? eq(tenantsTable.siteId, siteId) : undefined;
-    const tenants = await db.select().from(tenantsTable).where(tenantSiteFilter);
-
     const invoiceSiteFilter = siteId > 0 ? eq(tenantInvoicesTable.siteId, siteId) : undefined;
-    const invoices = await db
-      .select({
-        bookingId: tenantInvoicesTable.bookingId,
-        id: tenantInvoicesTable.id,
-        status: tenantInvoicesTable.status,
-        totalAmount: tenantInvoicesTable.totalAmount,
-        outstandingAmount: tenantInvoicesTable.outstandingAmount,
-        dueDate: tenantInvoicesTable.dueDate,
-      })
-      .from(tenantInvoicesTable)
-      .where(invoiceSiteFilter)
-      .orderBy(desc(tenantInvoicesTable.createdAt));
+
+    // Keempat dataset tidak saling bergantung. Jalankan paralel agar latency
+    // endpoint mengikuti query paling lambat, bukan total empat DB round-trip.
+    const [units, bookings, tenants, invoices] = await Promise.all([
+      db.select().from(mallUnitsTable)
+        .where(unitSiteFilter)
+        .orderBy(mallUnitsTable.positionY, mallUnitsTable.positionX),
+      db
+        .select({
+          id: tenantBookingsTable.id,
+          unitCode: tenantBookingsTable.unitCode,
+          tenantId: tenantBookingsTable.tenantId,
+          contractStatus: tenantBookingsTable.contractStatus,
+          paymentStatus: tenantBookingsTable.paymentStatus,
+          startDate: tenantBookingsTable.startDate,
+          endDate: tenantBookingsTable.endDate,
+          dueDate: tenantBookingsTable.dueDate,
+          periodLabel: tenantBookingsTable.periodLabel,
+          totalAmount: tenantBookingsTable.totalAmount,
+          paidAmount: tenantBookingsTable.paidAmount,
+          remainingAmount: tenantBookingsTable.remainingAmount,
+        })
+        .from(tenantBookingsTable)
+        .where(and(...bookingConditions)),
+      db.select().from(tenantsTable).where(tenantSiteFilter),
+      db
+        .select({
+          bookingId: tenantInvoicesTable.bookingId,
+          id: tenantInvoicesTable.id,
+          status: tenantInvoicesTable.status,
+          totalAmount: tenantInvoicesTable.totalAmount,
+          outstandingAmount: tenantInvoicesTable.outstandingAmount,
+          dueDate: tenantInvoicesTable.dueDate,
+        })
+        .from(tenantInvoicesTable)
+        .where(invoiceSiteFilter)
+        .orderBy(desc(tenantInvoicesTable.createdAt)),
+    ]);
 
     const bookingByUnit = new Map<string, typeof bookings[number]>();
     for (const b of bookings) {
@@ -225,6 +227,7 @@ router.get("/mall-units", async (req, res) => {
       };
     });
 
+    res.setHeader("Cache-Control", "private, max-age=15, stale-while-revalidate=30");
     res.json(result);
   } catch (err) {
     req.log.error(err, "Failed to get mall units");

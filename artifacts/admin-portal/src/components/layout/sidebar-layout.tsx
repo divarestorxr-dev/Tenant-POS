@@ -221,39 +221,47 @@ function SidebarNav({ children }: { children: React.ReactNode }) {
   const notifCount = upcomingData?.count ?? 0;
   const grouped = groupSites(Array.isArray(sites) ? sites : []);
 
-  // Warm the two heaviest Data Tenant requests for inactive sites in the
-  // background. The cache is keyed by site, so switching Sport Center/TOD M1
-  // can render the correct dataset immediately instead of briefly showing the
-  // previous site's rows while a refetch is still in flight.
+  // Warm Data Tenant for the CURRENT site first, then the other sites.
+  // This makes a normal sidebar click into Data Tenant render from React Query
+  // cache immediately instead of starting both API calls only after navigation.
   useEffect(() => {
-    if (!backgroundReady || !activeSite || !can("owner", "admin") || sites.length < 2) return;
+    if (!backgroundReady || !activeSite || !can("owner", "admin") || sites.length === 0) return;
 
     let cancelled = false;
-    const run = async () => {
-      for (const site of sites) {
-        if (cancelled || site.id === activeSite.id) continue;
-        const siteHeaders = { "x-site-id": String(site.id) };
 
-        await queryClient.prefetchQuery({
-          queryKey: ["/api/tenants", site.id],
+    const prefetchSite = async (siteId: number) => {
+      const siteHeaders = { "x-site-id": String(siteId) };
+      await Promise.all([
+        queryClient.prefetchQuery({
+          queryKey: ["/api/tenants", siteId],
           queryFn: async () => {
             const res = await apiFetch("/api/tenants", { headers: siteHeaders });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
           },
           staleTime: 60_000,
-        }).catch(() => undefined);
-
-        if (cancelled) break;
-        await queryClient.prefetchQuery({
-          queryKey: ["/api/mall-units", site.id],
+        }),
+        queryClient.prefetchQuery({
+          queryKey: ["/api/mall-units", siteId],
           queryFn: async () => {
             const res = await apiFetch("/api/mall-units", { headers: siteHeaders });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             return res.json();
           },
           staleTime: 60_000,
-        }).catch(() => undefined);
+        }),
+      ]).catch(() => undefined);
+    };
+
+    const run = async () => {
+      // Current site has priority because this is the dataset the next sidebar
+      // navigation is most likely to need.
+      await prefetchSite(activeSite.id);
+      if (cancelled) return;
+
+      for (const site of sites) {
+        if (cancelled || site.id === activeSite.id) continue;
+        await prefetchSite(site.id);
       }
     };
 

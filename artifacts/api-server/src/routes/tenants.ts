@@ -5,7 +5,7 @@ import {
   tenantBookingsTable, tenantInvoicesTable, tenantPaymentsTable, mallSitesTable,
   financePaymentEventsTable, tenantUserAccessTable, mallUnitsTable,
 } from "@workspace/db/schema";
-import { eq, asc, desc, and, inArray, sql } from "drizzle-orm";
+import { eq, asc, desc, and, inArray, sql, getTableColumns } from "drizzle-orm";
 import { requireAnyRole } from "../middlewares/auth";
 import { logAudit } from "../lib/audit";
 import { sseBroker } from "../lib/sse-broker";
@@ -17,75 +17,57 @@ router.use("/tenants", requireAnyRole("owner", "admin"));
 router.get("/tenants", async (req, res) => {
   try {
     const siteId = req.siteId;
-    const conditions = siteId > 0 ? [eq(tenantsTable.siteId, siteId)] : [];
+    const tenantColumns = getTableColumns(tenantsTable);
+
+    // Satu round-trip DB saja. Sebelumnya endpoint melakukan:
+    // tenants -> booking aktif -> outstanding invoice secara berurutan/bertahap.
+    // Pada Hostinger + Supabase network latency antar-query menjadi bagian terbesar
+    // dari waktu buka Data Tenant. Scalar subqueries ini dikerjakan PostgreSQL dalam
+    // satu statement dan memakai tenant_id sebagai correlation key.
     const rows = await db
-      .select()
+      .select({
+        ...tenantColumns,
+        latestContractStartDate: sql<string | null>`(
+          SELECT tb.start_date
+          FROM tenant_bookings tb
+          WHERE tb.tenant_id = ${tenantsTable.id}
+            AND tb.contract_status IN ('active', 'expiring_soon')
+            AND tb.booking_status IN ('aktif', 'active', 'confirmed')
+          ORDER BY tb.id DESC
+          LIMIT 1
+        )`,
+        latestContractEndDate: sql<string | null>`(
+          SELECT tb.end_date
+          FROM tenant_bookings tb
+          WHERE tb.tenant_id = ${tenantsTable.id}
+            AND tb.contract_status IN ('active', 'expiring_soon')
+            AND tb.booking_status IN ('aktif', 'active', 'confirmed')
+          ORDER BY tb.id DESC
+          LIMIT 1
+        )`,
+        totalOutstanding: sql<number>`COALESCE((
+          SELECT SUM(ti.outstanding_amount::numeric)
+          FROM tenant_invoices ti
+          WHERE ti.tenant_id = ${tenantsTable.id}
+            AND ti.status IN ('unpaid', 'overdue', 'partial')
+            AND COALESCE(ti.outstanding_amount, 0)::numeric > 0
+            AND (ti.period_start IS NULL
+              OR ti.period_start::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date)
+        ), 0)::numeric`,
+      })
       .from(tenantsTable)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
+      .where(siteId > 0 ? eq(tenantsTable.siteId, siteId) : undefined)
       .orderBy(asc(tenantsTable.id));
 
-    if (rows.length === 0) { res.json([]); return; }
-
-    const tenantIds = rows.map((t) => t.id);
-
-    // Booking aktif terbaru adalah source of truth untuk masa kontrak.
-    // Ambil start/end dari BARIS booking yang sama (bukan MIN/MAX terpisah),
-    // agar aman jika satu tenant pernah memiliki lebih dari satu booking aktif.
-    const [activeBookingRows, outstandingRows] = await Promise.all([
-      db
-        .select({
-          tenantId: tenantBookingsTable.tenantId,
-          bookingId: tenantBookingsTable.id,
-          contractStartDate: tenantBookingsTable.startDate,
-          contractEndDate: tenantBookingsTable.endDate,
-        })
-        .from(tenantBookingsTable)
-        .where(
-          and(
-            inArray(tenantBookingsTable.tenantId, tenantIds),
-            inArray(tenantBookingsTable.contractStatus, ["active", "expiring_soon"]),
-            inArray(tenantBookingsTable.bookingStatus, ["aktif", "active", "confirmed"]),
-          ),
-        )
-        .orderBy(asc(tenantBookingsTable.tenantId), desc(tenantBookingsTable.id)),
-      db
-        .select({
-          tenantId: tenantInvoicesTable.tenantId,
-          totalOutstanding: sql<string>`COALESCE(SUM(${tenantInvoicesTable.outstandingAmount}::numeric), 0)`.as("total_outstanding"),
-        })
-        .from(tenantInvoicesTable)
-        .where(
-          and(
-            inArray(tenantInvoicesTable.tenantId, tenantIds),
-            inArray(tenantInvoicesTable.status, ["unpaid", "overdue", "partial"]),
-            sql`COALESCE(${tenantInvoicesTable.outstandingAmount}, 0)::numeric > 0`,
-            sql`(${tenantInvoicesTable.periodStart} IS NULL OR ${tenantInvoicesTable.periodStart}::date <= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date)`,
-          ),
-        )
-        .groupBy(tenantInvoicesTable.tenantId),
-    ]);
-
-    const activeBookingMap = new Map<number, { startDate: string | null; endDate: string | null }>();
-    for (const b of activeBookingRows) {
-      // orderBy id DESC: baris pertama per tenant = booking aktif terbaru.
-      if (!activeBookingMap.has(b.tenantId)) {
-        activeBookingMap.set(b.tenantId, {
-          startDate: b.contractStartDate,
-          endDate: b.contractEndDate,
-        });
-      }
-    }
-    const outstandingMap = new Map(outstandingRows.map((o) => [o.tenantId, Number(o.totalOutstanding ?? 0)]));
-
-    res.json(rows.map((t) => {
-      const activeBooking = activeBookingMap.get(t.id);
-      return {
-        ...t,
-        contractStartDate: activeBooking?.startDate ?? t.contractStartDate ?? null,
-        contractEndDate: activeBooking?.endDate ?? t.contractEndDate ?? null,
-        totalOutstanding: outstandingMap.get(t.id) ?? 0,
-      };
-    }));
+    res.setHeader("Cache-Control", "private, max-age=15, stale-while-revalidate=30");
+    res.json(rows.map((t) => ({
+      ...t,
+      contractStartDate: t.latestContractStartDate ?? t.contractStartDate ?? null,
+      contractEndDate: t.latestContractEndDate ?? t.contractEndDate ?? null,
+      totalOutstanding: Number(t.totalOutstanding ?? 0),
+      latestContractStartDate: undefined,
+      latestContractEndDate: undefined,
+    })));
   } catch (err) {
     req.log.error(err, "Failed to list tenants");
     res.status(500).json({ error: "Gagal mengambil data tenant" });
