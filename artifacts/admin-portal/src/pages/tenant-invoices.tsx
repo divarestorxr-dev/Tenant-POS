@@ -1400,6 +1400,22 @@ export default function TenantInvoices() {
       toast({ title: "Validasi Gagal", description: "Tenant wajib dipilih.", variant: "destructive" });
       return;
     }
+
+    if (createForm.bookingId && createForm.periodStart) {
+      const duplicate = (invoices ?? []).find((inv) =>
+        String(inv.bookingId ?? "") === createForm.bookingId &&
+        (inv.periodStart ?? "").slice(0, 10) === createForm.periodStart
+      );
+      if (duplicate) {
+        toast({
+          title: "Invoice Sudah Ada",
+          description: `${duplicate.invoiceNumber} sudah memakai booking dan periode mulai tersebut. Gunakan invoice yang sudah ada atau pilih periode lain.`,
+          variant: "destructive",
+        });
+        return;
+      }
+    }
+
     createMutation.mutate({
       tenantId: Number(createForm.tenantId),
       bookingId: createForm.bookingId ? Number(createForm.bookingId) : null,
@@ -2497,13 +2513,16 @@ export default function TenantInvoices() {
                         ...f,
                         tenantId: v,
                         bookingId: "",
-                        unitCode: tenant?.boothNumber ?? f.unitCode,
-                        rentAmount: tenant?.defaultRentAmount ?? f.rentAmount,
-                        serviceChargeAmount: tenant?.defaultServiceChargeAmount ?? f.serviceChargeAmount,
-                        electricityChargeAmount: tenant?.defaultElectricityChargeAmount ?? f.electricityChargeAmount,
-                        waterChargeAmount: tenant?.defaultWaterChargeAmount ?? f.waterChargeAmount,
-                        otherChargeAmount: tenant?.defaultOtherChargeAmount ?? f.otherChargeAmount,
-                        trashChargeAmount: tenant?.defaultTrashChargeAmount ?? f.trashChargeAmount,
+                        unitCode: tenant?.boothNumber ?? "",
+                        periodStart: "",
+                        periodEnd: "",
+                        dueDate: "",
+                        rentAmount: tenant?.defaultRentAmount ?? "",
+                        serviceChargeAmount: tenant?.defaultServiceChargeAmount ?? "",
+                        electricityChargeAmount: tenant?.defaultElectricityChargeAmount ?? "",
+                        waterChargeAmount: tenant?.defaultWaterChargeAmount ?? "",
+                        otherChargeAmount: tenant?.defaultOtherChargeAmount ?? "",
+                        trashChargeAmount: tenant?.defaultTrashChargeAmount ?? "",
                       }));
                     }}
                   >
@@ -2527,15 +2546,15 @@ export default function TenantInvoices() {
                       setCreateForm(f => ({
                         ...f,
                         bookingId: v,
-                        unitCode: bk?.unitCode ?? f.unitCode,
-                        periodStart: bk?.startDate ? bk.startDate.slice(0, 10) : f.periodStart,
-                        periodEnd: bk?.endDate ? bk.endDate.slice(0, 10) : f.periodEnd,
-                        dueDate: bk?.dueDate ? bk.dueDate.slice(0, 10) : f.dueDate,
-                        rentAmount: bk?.rentAmount ? String(bk.rentAmount) : f.rentAmount,
-                        serviceChargeAmount: bk?.serviceChargeAmount ? String(bk.serviceChargeAmount) : f.serviceChargeAmount,
-                        electricityChargeAmount: bk?.electricityChargeAmount ? String(bk.electricityChargeAmount) : f.electricityChargeAmount,
-                        waterChargeAmount: bk?.waterChargeAmount ? String(bk.waterChargeAmount) : f.waterChargeAmount,
-                        otherChargeAmount: bk?.otherChargeAmount ? String(bk.otherChargeAmount) : f.otherChargeAmount,
+                        unitCode: bk?.unitCode ?? "",
+                        periodStart: bk?.startDate ? bk.startDate.slice(0, 10) : "",
+                        periodEnd: bk?.endDate ? bk.endDate.slice(0, 10) : "",
+                        dueDate: bk?.dueDate ? bk.dueDate.slice(0, 10) : "",
+                        rentAmount: bk?.rentAmount ? String(bk.rentAmount) : "",
+                        serviceChargeAmount: bk?.serviceChargeAmount ? String(bk.serviceChargeAmount) : "",
+                        electricityChargeAmount: bk?.electricityChargeAmount ? String(bk.electricityChargeAmount) : "",
+                        waterChargeAmount: bk?.waterChargeAmount ? String(bk.waterChargeAmount) : "",
+                        otherChargeAmount: bk?.otherChargeAmount ? String(bk.otherChargeAmount) : "",
                         trashChargeAmount: f.trashChargeAmount,
                       }));
                     }}
