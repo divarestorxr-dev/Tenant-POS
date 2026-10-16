@@ -57,6 +57,18 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Reject disk-based runtime credential artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'writeFileSync\(runtimeBridgePath|writeRuntimeEnvBridge\(' -- scripts/hostinger-build.mjs scripts/hostinger-start.mjs; then
+            echo 'Disk-based runtime credential persistence is forbidden.' >&2
+            exit 1
+          fi
+          if find . -type f -name '.hostinger-runtime-env.json' -not -path './node_modules/*' -print -quit | grep -q .; then
+            echo 'Runtime credential artifact detected in checkout/build output.' >&2
+            exit 1
+          fi
       - name: Prepare test database
         run: |
           pnpm --filter @workspace/db push-force
