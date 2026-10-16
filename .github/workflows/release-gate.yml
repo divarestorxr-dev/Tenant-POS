@@ -81,3 +81,12 @@ jobs:
         run: pnpm run typecheck
       - name: Build
         run: pnpm run build
+      - name: Audit build outputs for credential artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find . -type f \( -name '.hostinger-runtime-env.json' -o -name 'secret.bin' -o -name 'secret.enc' \) -not -path './node_modules/*' -print -quit | grep -q .; then
+            echo 'Forbidden runtime credential artifact found after build.' >&2
+            exit 1
+          fi
+
