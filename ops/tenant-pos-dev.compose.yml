@@ -20,7 +20,7 @@ services:
       SUPABASE_DATABASE_URL_DEV: "${TENANT_POS_DEV_DATABASE_URL:?required}"
       SESSION_SECRET: "${TENANT_POS_DEV_SESSION_SECRET:?required}"
     volumes:
-      - ./:/workspace:ro
+      - ../:/workspace:ro
     tmpfs:
       - /tmp:size=64m,mode=1777
     networks:
