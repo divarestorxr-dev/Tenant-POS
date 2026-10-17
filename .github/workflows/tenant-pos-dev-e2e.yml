@@ -1,0 +1,62 @@
+name: Tenant-POS DEV E2E Regression
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tenant-dev-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: tenant_dev_ci
+        ports:
+          - 65432:5432
+        options: >-
+          --health-cmd="pg_isready -U ci -d tenant_dev_ci"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      NODE_ENV: test
+      APP_ENV: development
+      SUPABASE_PG_URL_DEV: postgresql://ci:ci@127.0.0.1:65432/tenant_dev_ci
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:65432/tenant_dev_ci
+      LOG_LEVEL: silent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Initialize disposable test DB
+        run: |
+          pnpm --filter @workspace/db push-force
+          pnpm --filter @workspace/db migrate
+      - name: Auth, RBAC, tenant isolation, invoice, booking and sandbox payment tests
+        run: >-
+          pnpm --filter @workspace/api-server exec vitest run --config vitest.config.ts
+          src/__tests__/dev-login-policy.test.ts
+          src/__tests__/auth.test.ts
+          src/__tests__/tenant-portal.test.ts
+          src/__tests__/tenant-pos.test.ts
+          src/__tests__/invoices.test.ts
+          src/__tests__/bookings.test.ts
+          src/__tests__/invoice-payment-laporan.test.ts
+          src/__tests__/whatsapp-payment-approval.test.ts
+      - name: Record test SHA
+        if: always()
+        run: echo "Candidate SHA ${GITHUB_SHA}" >> "${GITHUB_STEP_SUMMARY}"

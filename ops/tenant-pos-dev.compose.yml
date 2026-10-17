@@ -1,0 +1,32 @@
+# Local DEV only. No host ports, no external network and no PROD credentials.
+services:
+  api:
+    image: node:22-alpine
+    working_dir: /workspace
+    command: ["node", "artifacts/api-server/dist/index.mjs"]
+    restart: "no"
+    read_only: true
+    user: "0:0"
+    mem_limit: 512m
+    cpus: 0.50
+    pids_limit: 100
+    environment:
+      NODE_ENV: development
+      PORT: "19051"
+      DEPLOY_COMMIT_SHA: "${TENANT_POS_DEV_COMMIT_SHA:?required}"
+      APP_ENV: development
+      ENABLE_DEV_LOGIN: "false"
+      DATABASE_URL: "${TENANT_POS_DEV_DATABASE_URL:?required}"
+      SUPABASE_PG_URL_DEV: "${TENANT_POS_DEV_DATABASE_URL:?required}"
+      SUPABASE_DATABASE_URL_DEV: "${TENANT_POS_DEV_DATABASE_URL:?required}"
+      SESSION_SECRET: "${TENANT_POS_DEV_SESSION_SECRET:?required}"
+    volumes:
+      - ../:/workspace:ro
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - isolated
+networks:
+  isolated:
+    name: tenant-pos-dev-isolated
+    external: true
