@@ -185,6 +185,8 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 app.get("/api/healthz", (_req, res) => {
+  const deploySha = process.env.DEPLOY_COMMIT_SHA?.trim();
+  if (deploySha && /^[a-f0-9]{40}$/i.test(deploySha)) res.setHeader("x-cst-commit-sha", deploySha);
   const adminWaGroup = getAdminWaGroupStatus();
   res.json({
     ok: true,
