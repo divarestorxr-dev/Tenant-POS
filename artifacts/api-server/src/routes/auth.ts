@@ -45,7 +45,7 @@ function errorChain(err: unknown): Array<{
 }
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
-const DEV_LOGIN_ENABLED = !IS_PRODUCTION;
+const DEV_LOGIN_ENABLED = !IS_PRODUCTION && process.env.ENABLE_DEV_LOGIN !== "false";
 
 const DEV_PHONE_NUMBERS = [
  "6282299997227",
