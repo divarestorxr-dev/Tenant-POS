@@ -13,6 +13,7 @@ services:
     environment:
       NODE_ENV: development
       PORT: "19051"
+      DEPLOY_COMMIT_SHA: "${TENANT_POS_DEV_COMMIT_SHA:?required}"
       APP_ENV: development
       ENABLE_DEV_LOGIN: "false"
       DATABASE_URL: "${TENANT_POS_DEV_DATABASE_URL:?required}"
