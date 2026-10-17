@@ -1,0 +1,29 @@
+name: DEV First Promotion Gate
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  promotion-check:
+    name: Require tested and live DEV
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      CANDIDATE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      DEV_CI_WORKFLOW: Release Gate
+      DEV_E2E_APPROVED_SHA: ${{ vars.DEV_E2E_APPROVED_SHA }}
+      DEV_PUBLIC_HEALTH_URL: ${{ vars.DEV_PUBLIC_HEALTH_URL }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fail closed unless exact DEV passed E2E + CI
+        run: node scripts/verify-dev-first-promotion.mjs

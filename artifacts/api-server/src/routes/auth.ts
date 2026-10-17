@@ -11,6 +11,7 @@ import { withDbRetry } from "../lib/db-retry";
 import { devLoginRateLimiter, googleAuthRateLimiter, authMeRateLimiter } from "../middlewares/rate-limit";
 import { normalizePhoneNumber } from "../services/otp-service";
 import { randomUUID } from "node:crypto";
+import { isDevLoginEnabled } from "../lib/dev-login-policy";
 
 const router: IRouter = Router();
 
@@ -45,7 +46,7 @@ function errorChain(err: unknown): Array<{
 }
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
-const DEV_LOGIN_ENABLED = !IS_PRODUCTION;
+const DEV_LOGIN_ENABLED = isDevLoginEnabled();
 
 const DEV_PHONE_NUMBERS = [
  "6282299997227",
