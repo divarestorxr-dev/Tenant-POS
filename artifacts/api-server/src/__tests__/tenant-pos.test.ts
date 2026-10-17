@@ -98,7 +98,8 @@ describe("Fase 4 — POS Pembayaran", () => {
       // berjalan paralel pada database CI yang sama dan dapat menambah/menghapus
       // payment approved di site ini di antara dua request. Bandingkan endpoint
       // dengan aggregate canonical saat ini: hanya payment approved, non-void,
-      // dan tanggal hari ini yang boleh dihitung.
+      // dan tanggal hari ini yang boleh dihitung. Owner tanpa site terpilih
+      // melihat total seluruh site; jangan filter hanya site tenant fixture.
       const [expectedApproved] = await db
         .select({ total: sql<number>`coalesce(sum(amount::numeric), 0)::int` })
         .from(tenantPaymentsTable)
@@ -106,7 +107,6 @@ describe("Fase 4 — POS Pembayaran", () => {
           sql`DATE(${tenantPaymentsTable.paidAt} AT TIME ZONE 'Asia/Jakarta') = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`,
           eq(tenantPaymentsTable.isVoided, false),
           eq(tenantPaymentsTable.approvalStatus, "approved"),
-          eq(tenantPaymentsTable.siteId, testTenant.siteId),
         ));
 
       expect(after.body.paidTodayAmount).toBe(expectedApproved?.total ?? 0);
