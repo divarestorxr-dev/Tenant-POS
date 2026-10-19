@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import app from "./app";
 import { config } from "./lib/config";
 import { logger } from "./lib/logger";
+import { installProcessErrorHandlers } from "./lib/process-errors";
 import { startOverdueScheduler } from "./lib/overdue-scheduler";
 import { startSheetSyncScheduler } from "./lib/sheet-sync-scheduler";
 import { dbConfig, pool } from "@workspace/db";
@@ -281,17 +282,7 @@ export function start(): void {
   });
 }
 
-// Safety net: cegah Worker thread (tesseract.js, pdf-parse) crash seluruh process
-process.on("unhandledRejection", (reason) => {
-  logger.warn({ reason }, "[process] unhandledRejection ditangkap — diabaikan agar server tidak crash");
-});
-process.on("uncaughtException", (err) => {
-  if ((err as NodeJS.ErrnoException).code === "ERR_WORKER_UNHANDLED_ERROR") {
-    logger.warn({ err: err.message }, "[process] Worker error diabaikan");
-    return;
-  }
-  logger.error({ err }, "[process] uncaughtException — server tetap jalan");
-});
+installProcessErrorHandlers();
 
 process.once("SIGTERM", () => shutdown("SIGTERM"));
 process.once("SIGINT", () => shutdown("SIGINT"));

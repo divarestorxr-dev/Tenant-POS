@@ -1306,6 +1306,7 @@ export default function TenantInvoices() {
   // ─── Blast Tagihan Scheduler ─────────────────────────────────────────────────
 
   type BlastStatusResp = {
+    backgroundMode?: "on-demand" | "scheduled";
     isRunning: boolean;
     lastRunAt: string | null;
     lastRunLabel: string | null;
@@ -1332,14 +1333,17 @@ export default function TenantInvoices() {
   const { data: blastStatus, refetch: refetchBlastStatus } = useQuery<BlastStatusResp>({
     queryKey: ["/api/blast-tagihan/status"],
     queryFn: () => apiFetch<BlastStatusResp>(`${BASE}/api/blast-tagihan/status`),
-    refetchInterval: 5000,
+    refetchInterval: (query) =>
+      query.state.data?.backgroundMode === "on-demand" && !query.state.data.isRunning ? false : 5000,
   });
+  const isBlastOnDemand = blastStatus?.backgroundMode === "on-demand";
 
   const blastTriggerMutation = useMutation({
     mutationFn: () =>
       apiPost<{ ok: boolean; message: string; startedAt: string }>(`${BASE}/api/blast-tagihan/trigger`, {}),
     onSuccess: (res) => {
       toast({ title: "Blast Tagihan Dimulai", description: res.message });
+      void refetchBlastStatus();
       setTimeout(() => { void refetchBlastStatus(); void refetchBlastHistory(); }, 3000);
     },
     onError: (e: Error) => toast({ title: "Gagal Trigger Blast", description: e.message, variant: "destructive" }),
@@ -1844,7 +1848,7 @@ export default function TenantInvoices() {
         </div>
       </div>
 
-      {/* ── Panel Blast Tagihan Otomatis ─────────────────────────────────────── */}
+      {/* ── Panel Blast Tagihan ──────────────────────────────────────────────── */}
       <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           {/* Info jadwal */}
@@ -1853,14 +1857,30 @@ export default function TenantInvoices() {
               <Send className="h-4 w-4 text-blue-600" />
             </div>
             <div>
-              <p className="text-sm font-semibold text-blue-900">Blast Tagihan Otomatis via WhatsApp</p>
+              <p className="text-sm font-semibold text-blue-900">
+                Blast Tagihan {isBlastOnDemand ? "Sesuai Permintaan" : "Otomatis"} via WhatsApp
+              </p>
               <p className="mt-0.5 text-xs text-blue-700">
-                Setiap awal bulan, sistem otomatis mengirim tagihan + link bayar ke semua tenant pada{" "}
-                <span className="font-semibold">08:00 WIB</span>.
-                Reminder H-7, H-3, H-1 jatuh tempo dan pengingat overdue juga dikirim otomatis.
+                {isBlastOnDemand ? (
+                  <>
+                    Jalankan pengiriman tagihan, link bayar, dan pengingat melalui tombol{" "}
+                    <span className="font-semibold">Kirim Sekarang</span>. Pengiriman berjalan sesuai permintaan.
+                  </>
+                ) : (
+                  <>
+                    Setiap awal bulan, sistem otomatis mengirim tagihan + link bayar ke semua tenant pada{" "}
+                    <span className="font-semibold">08:00 WIB</span>.
+                    Reminder H-7, H-3, H-1 jatuh tempo dan pengingat overdue juga dikirim otomatis.
+                  </>
+                )}
               </p>
               <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {blastStatus?.scheduledTimesWib?.map((t) => (
+                {isBlastOnDemand ? (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                    <Send className="h-3 w-3" />
+                    On-demand · Kirim manual
+                  </span>
+                ) : blastStatus?.scheduledTimesWib?.map((t) => (
                   <span key={t} className="inline-flex items-center gap-1 rounded-md bg-blue-100 px-2 py-0.5 text-[11px] font-medium text-blue-700">
                     <Clock className="h-3 w-3" />
                     {t}

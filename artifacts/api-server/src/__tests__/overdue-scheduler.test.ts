@@ -327,11 +327,16 @@ describe("daily reminder periode aktif", () => {
 });
 
 describe("overdue scheduler daily window guard", () => {
+  beforeEach(() => {
+    vi.stubEnv("TENANT_POS_BACKGROUND_MODE", "scheduled");
+  });
+
   afterEach(() => {
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.doUnmock("@workspace/db");
     vi.resetModules();
+    vi.unstubAllEnvs();
   });
 
   it("menjalankan catch-up sekali saat app restart setelah 08:00 WIB", async () => {
