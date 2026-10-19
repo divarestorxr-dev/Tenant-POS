@@ -2,22 +2,23 @@ import { writeSync } from "node:fs";
 
 let terminating = false;
 let installed = false;
+const fatalCleanups = new Set<() => Promise<void>>();
+
+export function registerFatalCleanup(cleanup: () => Promise<void>): () => void {
+  fatalCleanups.add(cleanup);
+  return () => { fatalCleanups.delete(cleanup); };
+}
 
 // A failed logging transport can itself emit an uncaught exception. Reporting
 // that failure through the same logger creates an endless error/CPU loop.
 // Use synchronous stderr and terminate: an uncaught error is not safe to resume.
 export function exitOnUnhandledError(
-  kind: "uncaughtException" | "unhandledRejection",
+  kind: "uncaughtException" | "unhandledRejection" | "loggingTransport",
   reason: unknown,
 ): void {
   if (terminating) return;
   terminating = true;
   process.exitCode = 1;
-
-  // Let the failed worker finish its current exit/close callbacks first.
-  // Calling process.exit synchronously from its error event can run Pino's
-  // exit hook before close and block in flushSync waiting for that dead worker.
-  setImmediate(() => process.exit(1));
 
   try {
     let detail: string;
@@ -32,6 +33,12 @@ export function exitOnUnhandledError(
   } catch {
     // Even a closed stderr must not prevent termination or re-enter a logger.
   }
+
+  // Resources own their cleanup. In particular, a Pino worker must emit close
+  // before process.exit can run without invoking its stale flush-on-exit hook.
+  // Waiting for an arbitrary event-loop turn does not establish that ordering.
+  void Promise.allSettled([...fatalCleanups].map((cleanup) => cleanup()))
+    .then(() => process.exit(1));
 }
 
 export function installProcessErrorHandlers(): void {
