@@ -8,7 +8,9 @@ export const logger = pino({
     "req.headers.cookie",
     "res.headers['set-cookie']",
   ],
-  ...(config.env === "development"
+  // Container stdout is collected as JSON. A pretty transport starts a worker,
+  // so reserve it for an interactive development terminal.
+  ...(config.env === "development" && process.stdout.isTTY === true
     ? {
         transport: {
           target: "pino-pretty",

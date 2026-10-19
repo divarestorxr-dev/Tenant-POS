@@ -11,6 +11,7 @@ import crypto from "crypto";
 import passport from "./lib/auth";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { getBackgroundWorkMode } from "./lib/background-work-policy";
 import { getAdminWaGroupStatus } from "./lib/whatsapp";
 
 const app: Express = express();
@@ -192,6 +193,7 @@ app.get("/api/healthz", (_req, res) => {
     ok: true,
     release: process.env.REPLIT_DEPLOYMENT_ID ?? process.env.REPL_ID ?? "unknown",
     paymentProofRevision: "proof-stream-v3",
+    backgroundWork: { mode: getBackgroundWorkMode() },
     database: {
       source: dbConfig.source,
       poolMode: dbConfig.poolMode,
