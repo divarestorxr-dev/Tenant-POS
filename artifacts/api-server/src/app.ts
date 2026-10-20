@@ -353,6 +353,7 @@ app.get("/emergency", (_req, res) => {
 // Ini yang memungkinkan /bayar/:token dan halaman lain bisa diakses langsung.
 const frontendCandidates = [
   path.join(process.cwd(), "artifacts/admin-portal/dist/public"),
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "public"),
   path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../admin-portal/dist/public"),
 ];
 const frontendDist = frontendCandidates.find((candidate) => fs.existsSync(path.join(candidate, "index.html")));
