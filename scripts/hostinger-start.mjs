@@ -1,73 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
-import path from "node:path";
-
+// Hostinger must inject Google OAuth and WhatsApp credentials as runtime
+// environment variables. Never read or recreate disk-based secret bridges.
 process.env.NODE_ENV = "production";
+process.env.PORT ||= "3000";
 
-if (!process.env.PORT) {
-  process.env.PORT = "3000";
-}
-
-const runtimeBridgePath = path.join(
-  process.cwd(),
-  "artifacts",
-  "api-server",
-  "dist",
-  ".hostinger-runtime-env.json",
-);
-
-const allowedBridgeKeys = new Set([
-  "GOOGLE_CLIENT_ID",
+const requiredRuntimeSecrets = [
   "GOOGLE_CLIENT_SECRET",
   "FONNTE_API_KEY",
   "FONNTE_TOKEN",
-  "ADMIN_WA_GROUP",
-  "ADMIN_WHATSAPP",
-  "FONNTE_ADMIN_WA",
-]);
-
-let bridgeUsed = false;
-
-if (existsSync(runtimeBridgePath)) {
-  try {
-    const parsed = JSON.parse(readFileSync(runtimeBridgePath, "utf8"));
-    for (const [key, value] of Object.entries(parsed)) {
-      if (
-        allowedBridgeKeys.has(key) &&
-        typeof value === "string" &&
-        value.trim() &&
-        !process.env[key]?.trim()
-      ) {
-        process.env[key] = value.trim();
-        bridgeUsed = true;
-      }
-    }
-  } catch (error) {
-    console.error(
-      "[hostinger-start] gagal membaca runtime env bridge:",
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-if (bridgeUsed) {
-  process.env.GOOGLE_AUTH_ENV_SOURCE = "hostinger-build-bridge";
-}
-
-console.log(
-  "[hostinger-start] auth env available: " +
-    [
-      "GOOGLE_CLIENT_ID",
-      "GOOGLE_CLIENT_SECRET",
-      "FONNTE_API_KEY",
-      "FONNTE_TOKEN",
-      "ADMIN_WA_GROUP",
-      "ADMIN_WHATSAPP",
-      "FONNTE_ADMIN_WA",
-    ]
-      .map((key) => `${key}=${Boolean(process.env[key]?.trim())}`)
-      .join(", ") +
-    `, ADMIN_WA_GROUP_FORMAT_VALID=${/^\\d+@g\\.us$/.test(process.env.ADMIN_WA_GROUP?.trim() ?? "")}` +
-    `, bridgeUsed=${bridgeUsed}`,
-);
+];
+console.log("[hostinger-start] runtime credentials available: " +
+  requiredRuntimeSecrets.map(key => key + "=" + Boolean(process.env[key]?.trim())).join(", "));
 
 await import("../artifacts/api-server/dist/index.mjs");

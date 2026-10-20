@@ -34,6 +34,16 @@ function gatewayDeviceId(): string | undefined {
 }
 
 export function isCstWaGatewayConfigured(): boolean {
+  // DEV/test must never contact a real gateway, even when a production token
+  // happens to be present in the preview environment.
+  // The reserved .test hostname is permitted only in unit tests with mocked fetch.
+  const fixture = process.env.NODE_ENV === "test" &&
+    gatewayBaseUrl() === "https://wa.example.test";
+  if (!fixture && (
+    process.env.NODE_ENV !== "production" ||
+    process.env.APP_ENV === "development" ||
+    process.env.DISABLE_WHATSAPP_SEND === "true"
+  )) return false;
   return gatewayToken().length > 0;
 }
 
@@ -271,6 +281,9 @@ export async function sendGatewayMedia(
   fileUrl: string,
   idempotencyKey?: string,
 ): Promise<GatewaySendResult> {
+  if (!isCstWaGatewayConfigured()) {
+    return { ok: true, skipped: true, error: "DEV WhatsApp sending disabled" };
+  }
   const media = mediaDescriptor(fileUrl);
   const normalized = normalizeWhatsappDestination(to);
 

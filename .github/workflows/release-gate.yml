@@ -57,15 +57,40 @@ jobs:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+      - name: Reject disk-based runtime credential artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git grep -nE 'writeFileSync\(runtimeBridgePath|writeRuntimeEnvBridge\(' -- scripts/hostinger-build.mjs scripts/hostinger-start.mjs; then
+            echo 'Disk-based runtime credential persistence is forbidden.' >&2
+            exit 1
+          fi
+          if find . -type f -name '.hostinger-runtime-env.json' -not -path './node_modules/*' -print -quit | grep -q .; then
+            echo 'Runtime credential artifact detected in checkout/build output.' >&2
+            exit 1
+          fi
       - name: Prepare test database
         run: |
           pnpm --filter @workspace/db push-force
           pnpm --filter @workspace/db migrate
       - name: API tests
         run: pnpm --filter @workspace/api-server test
+      - name: Runtime worker and logger regression tests
+        run: |
+          pnpm --filter @workspace/api-server test:background
+          pnpm --filter @workspace/api-server test:runtime
       - name: Admin Portal tests
         run: pnpm --filter @workspace/admin-portal test
       - name: Typecheck
         run: pnpm run typecheck
       - name: Build
         run: pnpm run build
+      - name: Audit build outputs for credential artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find . -type f \( -name '.hostinger-runtime-env.json' -o -name 'secret.bin' -o -name 'secret.enc' \) -not -path './node_modules/*' -print -quit | grep -q .; then
+            echo 'Forbidden runtime credential artifact found after build.' >&2
+            exit 1
+          fi
+

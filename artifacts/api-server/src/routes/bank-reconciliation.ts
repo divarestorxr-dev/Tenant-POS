@@ -39,6 +39,7 @@ import { postTenantPaymentAccountingEntry } from "../lib/accounting-entry";
 import { appContextMiddleware, type AppContext } from "../middlewares/app-context";
 import { requireAnyRole } from "../middlewares/auth";
 import { logger } from "../lib/logger";
+import { getBackgroundWorkMode } from "../lib/background-work-policy";
 
 const router: IRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
@@ -2576,7 +2577,11 @@ router.get("/bank-reconciliation/sync-config", async (_req, res) => {
       .from(systemSettingsTable)
       .where(eq(systemSettingsTable.key, SYNC_CONFIG_KEY))
       .limit(1);
-    res.json(row[0]?.value ?? { enabled: false, spreadsheetId: "", sheetName: "", bankAccountId: "", intervalMinutes: 5, lastSyncAt: null, lastSyncResult: null });
+    const config = row[0]?.value as Record<string, unknown> | null | undefined;
+    res.json({
+      ...(config ?? { enabled: false, spreadsheetId: "", sheetName: "", bankAccountId: "", intervalMinutes: 5, lastSyncAt: null, lastSyncResult: null }),
+      backgroundMode: getBackgroundWorkMode(),
+    });
   } catch {
     res.status(500).json({ error: "Gagal memuat konfigurasi sinkronisasi" });
   }

@@ -6,11 +6,13 @@ import cors from "cors";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
 import path from "path";
+import { fileURLToPath } from "node:url";
 import fs from "fs";
 import crypto from "crypto";
 import passport from "./lib/auth";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { getBackgroundWorkMode } from "./lib/background-work-policy";
 import { getAdminWaGroupStatus } from "./lib/whatsapp";
 
 const app: Express = express();
@@ -185,11 +187,14 @@ app.use(passport.initialize());
 app.use(passport.session());
 
 app.get("/api/healthz", (_req, res) => {
+  const deploySha = process.env.DEPLOY_COMMIT_SHA?.trim();
+  if (deploySha && /^[a-f0-9]{40}$/i.test(deploySha)) res.setHeader("x-cst-commit-sha", deploySha);
   const adminWaGroup = getAdminWaGroupStatus();
   res.json({
     ok: true,
     release: process.env.REPLIT_DEPLOYMENT_ID ?? process.env.REPL_ID ?? "unknown",
     paymentProofRevision: "proof-stream-v3",
+    backgroundWork: { mode: getBackgroundWorkMode() },
     database: {
       source: dbConfig.source,
       poolMode: dbConfig.poolMode,
@@ -346,9 +351,14 @@ app.get("/emergency", (_req, res) => {
 // serve file statis dari build admin portal jika folder dist ada,
 // dengan fallback ke index.html untuk semua route non-API (SPA behavior).
 // Ini yang memungkinkan /bayar/:token dan halaman lain bisa diakses langsung.
-const frontendDist = path.join(process.cwd(), "artifacts/admin-portal/dist/public");
-const frontendIndex = path.join(frontendDist, "index.html");
-if (fs.existsSync(frontendDist)) {
+const frontendCandidates = [
+  path.join(process.cwd(), "artifacts/admin-portal/dist/public"),
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "public"),
+  path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../admin-portal/dist/public"),
+];
+const frontendDist = frontendCandidates.find((candidate) => fs.existsSync(path.join(candidate, "index.html")));
+const frontendIndex = frontendDist ? path.join(frontendDist, "index.html") : "";
+if (frontendDist) {
   logger.info({ frontendDist }, "[app] Serving admin portal static files");
   app.use(express.static(frontendDist, {
     maxAge: "1h",
@@ -379,11 +389,11 @@ if (fs.existsSync(frontendDist)) {
     res.sendFile(frontendIndex);
   });
 } else {
-  // Fallback: GET / selalu 200 agar Cloud Run health check lulus
-  // meski frontend belum di-build (misal saat pertama deploy).
+  // Frontend absent: expose an actual outage instead of a misleading HTTP 200.
+  logger.error({ frontendCandidates }, "[app] Frontend build not found; web routes unavailable");
   app.use((_req, res, next) => {
     if (_req.path === "/" && _req.method === "GET") {
-      res.status(200).json({ status: "ok", service: "Mall Admin API" });
+      res.status(503).json({ status: "unavailable", error: "frontend_build_missing" });
     } else {
       next();
     }

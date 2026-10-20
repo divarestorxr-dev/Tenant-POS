@@ -61,3 +61,10 @@ secrets.sh
 **/*service_account*.json
 **/*google*credentials*.json
 **/*gcp*credentials*.json
+
+# Hostinger legacy runtime secret bridge and temporary credentials
+**/.hostinger-runtime-env.json
+**/.hostinger-runtime-env.*
+**/*runtime-env*.json
+*.secret.bin
+*.secret.enc
