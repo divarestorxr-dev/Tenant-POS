@@ -329,28 +329,32 @@ export async function getCstWaGatewayStatus(): Promise<GatewayStatus> {
     const workers = Array.isArray(data["workers"])
       ? (data["workers"] as Array<Record<string, unknown>>)
       : [];
-    const onlineWorkers = Number(data["onlineWorkers"] ?? 0);
+    // Gateway v1 now returns status/api/messaging but no device worker count.
+    // Do not misreport a missing field as zero connected workers.
+    const hasWorkerCount = typeof data["onlineWorkers"] === "number";
+    const onlineWorkers = hasWorkerCount ? Number(data["onlineWorkers"]) : undefined;
     const queue = (data["queue"] ?? {}) as Record<string, unknown>;
-    const queueCount =
-      Number(queue["waiting"] ?? 0) +
-      Number(queue["active"] ?? 0) +
-      Number(queue["delayed"] ?? 0);
-    // /v1/status sengaja mengembalikan HTTP 503 jika overall gateway degraded,
-    // misalnya satu device QR_REQUIRED. Selama masih ada worker ONLINE,
-    // Tenant-POS tetap memiliki jalur pengiriman WhatsApp yang aktif.
-    const connected = onlineWorkers > 0;
-    const overallStatus = String(data["overallStatus"] ?? "unknown");
-
+    const queueCount = Number(queue["waiting"] ?? 0) + Number(queue["active"] ?? 0) + Number(queue["delayed"] ?? 0);
+    const overallStatus = String(data["overallStatus"] ?? data["status"] ?? "unknown");
+    const messagingStatus = String(data["messaging"] ?? "unknown");
+    const connected = hasWorkerCount ? (onlineWorkers ?? 0) > 0 : null;
+    const operational = res.ok && overallStatus === "operational" && messagingStatus === "operational";
     return {
       configured,
-      connected,
+      connected: configured ? connected : false,
       provider: "CST WA Gateway",
-      message: connected
-        ? overallStatus === "operational"
-          ? "WhatsApp aktif melalui CST WA Gateway"
-          : `CST WA Gateway degraded, tetapi ${onlineWorkers} worker WhatsApp masih online`
-        : "CST WA Gateway belum memiliki worker WhatsApp online",
-      onlineWorkers,
+      message: !configured
+        ? "Token CST WA Gateway belum dikonfigurasi untuk Tenant POS"
+        : !hasWorkerCount
+          ? operational
+            ? "CST WA Gateway operasional; status koneksi perangkat Tenant POS perlu diverifikasi"
+            : "Status perangkat tidak tersedia dari CST WA Gateway"
+          : connected
+            ? overallStatus === "operational"
+              ? "WhatsApp aktif melalui CST WA Gateway"
+              : `CST WA Gateway degraded, tetapi ${onlineWorkers} worker WhatsApp masih online`
+            : "CST WA Gateway belum memiliki worker WhatsApp online",
+      ...(hasWorkerCount ? { onlineWorkers } : {}),
       queueCount,
       workers,
     };
