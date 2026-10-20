@@ -15,5 +15,8 @@ if (npmUa.startsWith("npm/")) {
   run("pnpm", ["run", "build:workspace"]);
 }
 
+// Verify that the release has all startup, backend, and frontend files.
+run(process.execPath, ["./scripts/verify-hostinger-release.mjs"]);
+
 // Secrets must be injected into the Node.js runtime environment by the hosting platform.
 // Never persist credentials in build outputs, temporary files, or deployable artifacts.
