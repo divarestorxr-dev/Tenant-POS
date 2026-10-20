@@ -7,6 +7,7 @@ const files = [
   "scripts/hostinger-start.mjs",
   "artifacts/api-server/dist/index.mjs",
   "artifacts/admin-portal/dist/public/index.html",
+  "artifacts/api-server/dist/public/index.html",
 ];
 let invalid = false;
 for (const file of files) {
