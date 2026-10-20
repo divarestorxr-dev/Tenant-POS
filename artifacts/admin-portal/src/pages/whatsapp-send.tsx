@@ -336,7 +336,7 @@ export default function WhatsAppSend() {
                 <StatusIcon className={`h-5 w-5 mt-0.5 shrink-0 ${statusColor}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`font-medium text-sm ${statusColor}`}>
-                    {status?.connected === true ? "Terhubung" : status?.connected === false ? "Tidak Terhubung" : "Status Tidak Diketahui"}
+                    {status?.connected === true ? "Terhubung" : status?.connected === false ? "Tidak Terhubung" : "Koneksi perangkat belum terverifikasi"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">{status?.message}</p>
                   {status?.onlineWorkers != null && (
