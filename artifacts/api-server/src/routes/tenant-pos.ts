@@ -1560,10 +1560,10 @@ router.get("/tenant-pos/receipts", async (req, res) => {
       limit: limitN,
       offset: offsetN,
       items: rows.map((r) => ({
-        integrityStatus: !knownPayments.has(r.paymentId) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
+        integrityStatus: (r.paymentId == null || !knownPayments.has(r.paymentId)) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
           ? "historical_reference_missing"
           : "verified_reference",
-        integrityMessage: !knownPayments.has(r.paymentId) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
+        integrityMessage: (r.paymentId == null || !knownPayments.has(r.paymentId)) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
           ? "Arsip historis: referensi pembayaran atau invoice asal tidak tersedia; jangan perlakukan sebagai transaksi aktif."
           : null,
         id: r.id,
