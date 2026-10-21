@@ -543,7 +543,7 @@ router.get(
       // must not turn an existing proof into a false 404.
       if (!ctx.isFullAccess) {
         if (req.siteId > 0) conditions.push(eq(linkedSiteId, req.siteId));
-        if (ctx.ownerCompanyId != null) conditions.push(eq(linkedCompanyId, ctx.ownerCompanyId));
+        if (req.siteId <= 0 && ctx.ownerCompanyId != null) conditions.push(eq(linkedCompanyId, ctx.ownerCompanyId));
         if (ctx.ownerTenantId != null) conditions.push(eq(tenantPaymentsTable.tenantId, ctx.ownerTenantId));
       }
 
