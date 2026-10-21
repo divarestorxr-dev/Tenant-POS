@@ -1544,11 +1544,28 @@ router.get("/tenant-pos/receipts", async (req, res) => {
         .where(conditions.length ? and(...conditions) : undefined),
     ]);
 
+    // Historical receipts may survive deletion of old test/migration transactions.
+    // Preserve those records, but expose missing references explicitly to the UI.
+    const paymentIds = [...new Set(rows.map(r => r.paymentId).filter((id): id is number => id != null))];
+    const invoiceIds = [...new Set(rows.map(r => r.invoiceId).filter((id): id is number => id != null))];
+    const [existingPayments, existingInvoices] = await Promise.all([
+      paymentIds.length ? db.select({ id: tenantPaymentsTable.id }).from(tenantPaymentsTable).where(inArray(tenantPaymentsTable.id, paymentIds)) : Promise.resolve([]),
+      invoiceIds.length ? db.select({ id: tenantInvoicesTable.id }).from(tenantInvoicesTable).where(inArray(tenantInvoicesTable.id, invoiceIds)) : Promise.resolve([]),
+    ]);
+    const knownPayments = new Set(existingPayments.map(r => r.id));
+    const knownInvoices = new Set(existingInvoices.map(r => r.id));
+
     res.json({
       total,
       limit: limitN,
       offset: offsetN,
       items: rows.map((r) => ({
+        integrityStatus: !knownPayments.has(r.paymentId) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
+          ? "historical_reference_missing"
+          : "verified_reference",
+        integrityMessage: !knownPayments.has(r.paymentId) || (r.invoiceId != null && !knownInvoices.has(r.invoiceId))
+          ? "Arsip historis: referensi pembayaran atau invoice asal tidak tersedia; jangan perlakukan sebagai transaksi aktif."
+          : null,
         id: r.id,
         paymentId: r.paymentId,
         receiptNumber: r.receiptNumber,
