@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Search,
@@ -170,6 +170,49 @@ export default function RiwayatPembayaran() {
   const [page, setPage] = useState(1);
   const [selectedPayment, setSelectedPayment] = useState<DetailPayment | null>(null);
   const [proofPreview, setProofPreview] = useState<string | null>(null);
+  const [proofBlobUrl, setProofBlobUrl] = useState<string | null>(null);
+  const [proofLoading, setProofLoading] = useState(false);
+  const [proofError, setProofError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!proofPreview) {
+      setProofBlobUrl(null);
+      setProofError(null);
+      setProofLoading(false);
+      return;
+    }
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    setProofBlobUrl(null);
+    setProofError(null);
+    setProofLoading(true);
+    void (async () => {
+      try {
+        const response = await apiFetch(proofPreview, { signal: controller.signal });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          throw new Error(body.error || `Bukti pembayaran tidak dapat dibuka (HTTP ${response.status})`);
+        }
+        const blob = await response.blob();
+        if (!blob.type.startsWith("image/") && blob.type !== "application/pdf") {
+          throw new Error("Format bukti pembayaran tidak didukung untuk pratinjau.");
+        }
+        if (controller.signal.aborted) return;
+        objectUrl = URL.createObjectURL(blob);
+        setProofBlobUrl(objectUrl);
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          setProofError(error instanceof Error ? error.message : "Gagal memuat bukti pembayaran.");
+        }
+      } finally {
+        if (!controller.signal.aborted) setProofLoading(false);
+      }
+    })();
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [proofPreview]);
   const [dateDraft, setDateDraft] = useState("");
   const [dateEditing, setDateEditing] = useState(false);
   const [dateSaving, setDateSaving] = useState(false);
@@ -757,18 +800,28 @@ export default function RiwayatPembayaran() {
           <DialogHeader>
             <DialogTitle>Bukti Pembayaran</DialogTitle>
           </DialogHeader>
-          {proofPreview && (
+          {proofLoading && (
+            <div className="flex h-48 items-center justify-center gap-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Memuat bukti pembayaran...
+            </div>
+          )}
+          {proofError && (
+            <div role="alert" className="rounded border border-destructive/30 p-4 text-sm text-destructive">
+              {proofError}
+            </div>
+          )}
+          {proofBlobUrl && !proofError && (
             <iframe
-              src={proofPreview}
+              src={proofBlobUrl}
               title="Bukti pembayaran tenant"
               className="w-full h-[70vh] rounded border bg-muted"
             />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setProofPreview(null)}>Tutup</Button>
-            {proofPreview && (
+            {proofBlobUrl && (
               <Button asChild>
-                <a href={proofPreview} target="_blank" rel="noopener noreferrer">
+                <a href={proofBlobUrl} target="_blank" rel="noopener noreferrer">
                   Buka di Tab Baru
                 </a>
               </Button>
