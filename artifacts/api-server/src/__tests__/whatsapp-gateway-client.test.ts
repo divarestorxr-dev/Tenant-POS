@@ -227,35 +227,32 @@ describe("CST WA Gateway client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("treats degraded gateway as connected while at least one worker is online", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          overallStatus: "degraded",
-          onlineWorkers: 2,
-          workers: [
-            { workerId: "worker-01:02", deviceId: "02", status: "QR_REQUIRED" },
-            { workerId: "worker-01:03", deviceId: "03", status: "ONLINE" },
-          ],
-          queue: { waiting: 3, active: 1, delayed: 2 },
-        }),
-        { status: 503, headers: { "content-type": "application/json" } },
-      ),
-    );
+  it("reports the authenticated Tenant POS device online", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: "tenant-pos-01", enabled: true, status: "ONLINE", workerId: "worker-01:tenant-pos-01" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-
     const result = await getCstWaGatewayStatus();
-    expect(result).toMatchObject({
-      configured: true,
-      connected: true,
-      provider: "CST WA Gateway",
-      onlineWorkers: 2,
-      queueCount: 6,
-    });
-    expect(result.message).toContain("degraded");
+    expect(result).toMatchObject({ configured: true, connected: true, provider: "CST WA Gateway", onlineWorkers: 1 });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/v1/devices");
+    expect((init.headers as Record<string, string>).Authorization).toMatch(/^Bearer /);
+  });
 
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect((init.headers as Record<string, string>).Authorization).toBeUndefined();
+  it("reports offline when assigned device is not ONLINE", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      devices: [{ deviceId: "tenant-pos-01", enabled: true, status: "QR_REQUIRED" }],
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await getCstWaGatewayStatus()).toMatchObject({ configured: true, connected: false, onlineWorkers: 0 });
+  });
+
+  it("reports unknown when client lacks device read permissions", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(
+      JSON.stringify({ error: "FORBIDDEN" }), { status: 403, headers: { "content-type": "application/json" } })));
+    const result = await getCstWaGatewayStatus();
+    expect(result).toMatchObject({ configured: true, connected: null });
+    expect(result.message).toContain("messages:read");
   });
 
   it("verifies inbound event payload through the client-scoped gateway endpoint", async () => {
