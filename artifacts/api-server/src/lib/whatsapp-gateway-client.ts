@@ -323,48 +323,45 @@ export async function sendGatewayMedia(
 
 export async function getCstWaGatewayStatus(): Promise<GatewayStatus> {
   const configured = isCstWaGatewayConfigured();
+  if (!configured) {
+    return { configured: false, connected: false, provider: "CST WA Gateway",
+      message: "Token pengiriman CST WA Gateway belum dikonfigurasi untuk Tenant POS" };
+  }
   try {
-    const res = await gatewayFetch("/v1/status", { method: "GET" }, false);
-    const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const workers = Array.isArray(data["workers"])
-      ? (data["workers"] as Array<Record<string, unknown>>)
-      : [];
-    // Gateway v1 now returns status/api/messaging but no device worker count.
-    // Do not misreport a missing field as zero connected workers.
-    const hasWorkerCount = typeof data["onlineWorkers"] === "number";
-    const onlineWorkers = hasWorkerCount ? Number(data["onlineWorkers"]) : undefined;
-    const queue = (data["queue"] ?? {}) as Record<string, unknown>;
-    const queueCount = Number(queue["waiting"] ?? 0) + Number(queue["active"] ?? 0) + Number(queue["delayed"] ?? 0);
-    const overallStatus = String(data["overallStatus"] ?? data["status"] ?? "unknown");
-    const messagingStatus = String(data["messaging"] ?? "unknown");
-    const connected = hasWorkerCount ? (onlineWorkers ?? 0) > 0 : null;
-    const operational = res.ok && overallStatus === "operational" && messagingStatus === "operational";
-    return {
-      configured,
-      connected: configured ? connected : false,
-      provider: "CST WA Gateway",
-      message: !configured
-        ? "Token CST WA Gateway belum dikonfigurasi untuk Tenant POS"
-        : !hasWorkerCount
-          ? operational
-            ? "CST WA Gateway operasional; status koneksi perangkat Tenant POS perlu diverifikasi"
-            : "Status perangkat tidak tersedia dari CST WA Gateway"
-          : connected
-            ? overallStatus === "operational"
-              ? "WhatsApp aktif melalui CST WA Gateway"
-              : `CST WA Gateway degraded, tetapi ${onlineWorkers} worker WhatsApp masih online`
-            : "CST WA Gateway belum memiliki worker WhatsApp online",
-      ...(hasWorkerCount ? { onlineWorkers } : {}),
-      queueCount,
-      workers,
-    };
+    // The public /v1/status is service-wide and has no device information.
+    // Use this API client's authenticated, company-scoped registry instead.
+    const res = await gatewayFetch("/v1/devices", { method: "GET" });
+    if (!res.ok) {
+      return { configured, connected: null, provider: "CST WA Gateway",
+        message: res.status === 403
+          ? "Akses pembacaan status perangkat ditolak: API Client memerlukan scope messages:read"
+          : `Status perangkat tidak dapat diperiksa (HTTP ${res.status})` };
+    }
+    const data = (await res.json()) as { devices?: Array<Record<string, unknown>> };
+    if (!Array.isArray(data.devices)) {
+      return { configured, connected: null, provider: "CST WA Gateway",
+        message: "Respons daftar perangkat CST WA Gateway tidak valid" };
+    }
+    const deviceId = gatewayDeviceId();
+    const devices = data.devices.filter(d => !deviceId || d.deviceId === deviceId);
+    if (devices.length === 0) {
+      return { configured, connected: false, provider: "CST WA Gateway",
+        message: deviceId ? `Perangkat ${deviceId} tidak terdaftar pada API Client` : "Tidak ada perangkat untuk API Client Tenant POS",
+        onlineWorkers: 0, workers: [] };
+    }
+    const workers = devices.map(d => ({
+      deviceId: d.deviceId, status: d.status, workerId: d.workerId,
+      lastHeartbeatAt: d.lastHeartbeatAt, enabled: d.enabled,
+    }));
+    const onlineWorkers = devices.filter(d => d.enabled !== false && String(d.status).toUpperCase() === "ONLINE").length;
+    const connected = onlineWorkers > 0;
+    return { configured, connected, provider: "CST WA Gateway",
+      message: connected ? `WhatsApp Tenant POS terhubung: ${onlineWorkers} perangkat online`
+        : "Perangkat WhatsApp Tenant POS belum online; periksa status dan pairing perangkat",
+      onlineWorkers, workers };
   } catch (err) {
-    return {
-      configured,
-      connected: null,
-      provider: "CST WA Gateway",
-      message: err instanceof Error ? err.message : "Tidak dapat menghubungi CST WA Gateway",
-    };
+    return { configured, connected: null, provider: "CST WA Gateway",
+      message: err instanceof Error ? err.message : "Gagal memeriksa perangkat Tenant POS" };
   }
 }
 
