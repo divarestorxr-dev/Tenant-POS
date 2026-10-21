@@ -313,7 +313,7 @@ export default function WhatsAppSend() {
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-base">Status CST WA Gateway</CardTitle>
+            <CardTitle className="text-base">Status Koneksi WhatsApp Tenant POS</CardTitle>
             <Button
               variant="ghost"
               size="sm"
@@ -336,9 +336,10 @@ export default function WhatsAppSend() {
                 <StatusIcon className={`h-5 w-5 mt-0.5 shrink-0 ${statusColor}`} />
                 <div className="flex-1 min-w-0">
                   <p className={`font-medium text-sm ${statusColor}`}>
-                    {status?.connected === true ? "Terhubung" : status?.connected === false ? "Tidak Terhubung" : "Koneksi perangkat belum terverifikasi"}
+                    {status?.connected === true ? "Terhubung — WhatsApp siap digunakan" : status?.connected === false ? "Tidak Terhubung — WhatsApp tidak siap" : "Status koneksi belum dapat dipastikan"}
                   </p>
                   <p className="text-xs text-muted-foreground mt-0.5">{status?.message}</p>
+                  <p className="text-xs text-muted-foreground mt-1">{status?.connected === true ? "Perangkat online menurut CST WA Gateway. Pesan dapat dikirim melalui perangkat ini." : status?.connected === false ? "Perangkat tidak online atau belum terdaftar. Periksa pengaturan dan koneksi WhatsApp." : "Sistem belum berhasil membaca status perangkat. Ini bukan bukti bahwa WhatsApp terputus; periksa izin API Client dan coba Refresh."}</p>
                   {status?.onlineWorkers != null && (
                     <p className="text-xs text-muted-foreground mt-0.5">
                       Worker online: {status.onlineWorkers}
