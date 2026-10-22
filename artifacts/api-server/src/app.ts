@@ -383,8 +383,8 @@ if (frontendDist) {
   // SPA shell untuk route seperti /tenant-invoices juga wajib selalu fresh,
   // sementara chunk hashed tetap immutable.
   app.use((_req, res) => {
-    // Missing uploaded files must be 404, not the SPA HTML shell (200).
-    if (_req.path === "/uploads" || _req.path.startsWith("/uploads/")) {
+    // Missing uploaded files and hashed frontend assets must return 404, never the SPA shell.
+    if (_req.path === "/uploads" || _req.path.startsWith("/uploads/") || _req.path === "/assets" || _req.path.startsWith("/assets/")) {
       res.status(404).send("Not Found");
       return;
     }
