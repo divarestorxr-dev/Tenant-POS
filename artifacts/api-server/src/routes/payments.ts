@@ -543,7 +543,13 @@ router.get(
       // must not turn an existing proof into a false 404.
       if (!ctx.isFullAccess) {
         if (req.siteId > 0) conditions.push(eq(linkedSiteId, req.siteId));
-        if (ctx.ownerCompanyId != null) conditions.push(eq(linkedCompanyId, ctx.ownerCompanyId));
+        // Site context already validates the selected company. Older payments
+        // may have legacy invoice/company associations; applying both filters
+        // would hide proof for a payment visible in payments-history.
+        // Keep company scope for all-site views that do not specify a site.
+        if (req.siteId === 0 && ctx.ownerCompanyId != null) {
+          conditions.push(eq(linkedCompanyId, ctx.ownerCompanyId));
+        }
         if (ctx.ownerTenantId != null) conditions.push(eq(tenantPaymentsTable.tenantId, ctx.ownerTenantId));
       }
 
