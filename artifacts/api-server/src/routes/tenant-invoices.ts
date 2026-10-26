@@ -15,7 +15,7 @@ import { logAudit } from "../lib/audit";
 import { getBaseUrl } from "../lib/app-url";
 import { writePaymentEvent, normalizePaymentMethod } from "../lib/payment-events";
 import { sendInvoiceNotification, sendPaymentConfirmation, sendAdminPosPaymentAlert, notifyAdminGroup, getSiteCompanyName, getAdminNotifyPhones, sendWaWithFile } from "../lib/whatsapp";
-import { uploadToStorage } from "../lib/supabase-storage";
+import { getPaymentProofBucket, uploadToStorage } from "../lib/supabase-storage";
 import { postTenantPaymentAccountingEntry } from "../lib/accounting-entry";
 import multer from "multer";
 
@@ -1153,14 +1153,34 @@ router.post("/tenant-invoices/:id/cancel", async (req, res) => {
 });
 
 // ─── POST /api/tenant-invoices/:id/payment ────────────────────────────────────
+const invoicePaymentProofUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!["image/jpeg", "image/png", "image/webp", "application/pdf"].includes(file.mimetype)) {
+      cb(new Error("Format bukti pembayaran tidak didukung (JPG, PNG, WebP, PDF)"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
 const invoicePaymentSchema = z.object({
-  amountPaid: z.number().positive({ message: "Jumlah bayar harus lebih dari 0" }),
+  amountPaid: z.coerce.number().positive({ message: "Jumlah bayar harus lebih dari 0" }),
   paymentMethod: z.enum(["tunai", "transfer", "qris", "edc", "other"]).default("tunai"),
-  paymentDate: z.string().optional(),
+  paymentDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Tanggal pembayaran harus YYYY-MM-DD").optional(),
   notes: z.string().optional().nullable(),
 });
 
-router.post("/tenant-invoices/:id/payment", async (req, res) => {
+router.post("/tenant-invoices/:id/payment", (req, res, next) => {
+  invoicePaymentProofUpload.single("proof")(req, res, (err) => {
+    if (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : "Berkas bukti pembayaran tidak valid" });
+      return;
+    }
+    next();
+  });
+}, async (req, res) => {
   const id = Number(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "ID tidak valid" }); return; }
 
@@ -1172,6 +1192,14 @@ router.post("/tenant-invoices/:id/payment", async (req, res) => {
   }
 
   const { amountPaid, paymentMethod, paymentDate, notes } = parsed.data;
+  // Tanggal transaksi dan waktu input admin adalah dua fakta berbeda.
+  const todayWib = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  if (paymentDate && (Number.isNaN(Date.parse(paymentDate + "T12:00:00+07:00")) || new Date(paymentDate + "T12:00:00+07:00").toLocaleDateString("sv-SE", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" }) !== paymentDate)) {
+    res.status(400).json({ error: "Tanggal pembayaran tidak valid" }); return;
+  }
+  if (paymentDate && paymentDate > todayWib) {
+    res.status(400).json({ error: "Tanggal pembayaran tidak boleh di masa depan" }); return;
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -1264,6 +1292,7 @@ router.post("/tenant-invoices/:id/payment", async (req, res) => {
 
       const datePart = new Date().toISOString().slice(0, 10).replace(/-/g, "");
       const prefix = `INV-PAY-${datePart}-`;
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${prefix}))`);
       const [countRow] = await tx
         .select({ count: sql<number>`count(*)::int` })
         .from(tenantPaymentsTable)
@@ -1271,7 +1300,16 @@ router.post("/tenant-invoices/:id/payment", async (req, res) => {
       const seq = ((countRow?.count ?? 0) + 1).toString().padStart(4, "0");
       const receiptNumber = `${prefix}${seq}`;
 
-      const paidAt = paymentDate ? new Date(paymentDate) : new Date();
+      const paidAt = paymentDate ? new Date(paymentDate + "T12:00:00+07:00") : new Date();
+      let proofUrl: string | null = null;
+      if (req.file) {
+        const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
+        if (!allowed.includes(req.file.mimetype)) throw Object.assign(new Error("Format bukti harus JPG, PNG, WebP, atau PDF"), { status: 400 });
+        const extension = req.file.mimetype === "application/pdf" ? "pdf" : req.file.mimetype === "image/png" ? "png" : req.file.mimetype === "image/webp" ? "webp" : "jpg";
+        const filename = `invoice-payment-${id}-${crypto.randomUUID()}.${extension}`;
+        try { proofUrl = await uploadToStorage(getPaymentProofBucket(), filename, req.file.buffer, req.file.mimetype, false); }
+        catch { throw Object.assign(new Error("Gagal menyimpan bukti pembayaran; transaksi belum dicatat"), { status: 502 }); }
+      }
 
       const [payment] = await tx
         .insert(tenantPaymentsTable)
@@ -1292,6 +1330,8 @@ router.post("/tenant-invoices/:id/payment", async (req, res) => {
           receiptNumber,
           notes: notes ?? null,
           paidAt,
+          proofUrl,
+          proofImageUrl: proofUrl,
         })
         .returning();
 
@@ -1318,6 +1358,9 @@ router.post("/tenant-invoices/:id/payment", async (req, res) => {
         invoiceId: id,
         amountPaid,
         paymentMethod,
+        paymentDate: result.payment.paidAt?.toISOString(),
+        recordedAt: result.payment.createdAt?.toISOString(),
+        hasProof: Boolean(result.payment.proofUrl),
         receiptNumber: result.receiptNumber,
         invoiceStatus: result.newStatus,
         invoiceAllocationAmount: result.invoiceAllocationAmount,

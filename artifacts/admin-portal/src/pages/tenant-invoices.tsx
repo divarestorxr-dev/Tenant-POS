@@ -877,6 +877,7 @@ export default function TenantInvoices() {
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<Invoice | null>(null);
   const [paymentForm, setPaymentForm] = useState<PaymentForm>(EMPTY_PAYMENT);
+  const [paymentProof, setPaymentProof] = useState<File | null>(null);
 
   // Cek apakah ada bukti pending_review untuk invoice yang sedang dibuka di dialog Bayar
   const { data: pendingProofCheck } = useQuery<{ hasPending: boolean; receiptNumber?: string }>({
@@ -1081,8 +1082,20 @@ export default function TenantInvoices() {
   });
 
   const paymentMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: object }) =>
-      apiPost<{ success: boolean; receiptNumber: string; invoiceStatus: string }>(`${BASE}/api/tenant-invoices/${id}/payment`, data),
+    mutationFn: async ({ id, data, proof }: { id: number; data: PaymentForm; proof: File | null }) => {
+      const form = new FormData();
+      form.append("amountPaid", data.amountPaid);
+      form.append("paymentMethod", data.paymentMethod);
+      form.append("paymentDate", data.paymentDate);
+      form.append("notes", data.notes);
+      if (proof) form.append("proof", proof);
+      const res = await apiFetchBase(BASE + "/api/tenant-invoices/" + id + "/payment", { method: "POST", body: form });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(err.error ?? "Gagal mencatat pembayaran");
+      }
+      return res.json() as Promise<{ success: boolean; receiptNumber: string; invoiceStatus: string }>;
+    },
     onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: ["/api/tenant-invoices"] });
       toast({
@@ -1091,6 +1104,7 @@ export default function TenantInvoices() {
       });
       setPaymentOpen(false);
       setPaymentTarget(null);
+      setPaymentProof(null);
     },
     onError: (e: Error) => toast({ title: "Gagal", description: e.message, variant: "destructive" }),
   });
@@ -1527,19 +1541,16 @@ export default function TenantInvoices() {
       toast({ title: "Validasi Gagal", description: "Jumlah bayar harus lebih dari 0.", variant: "destructive" });
       return;
     }
-    paymentMutation.mutate({
-      id: paymentTarget.id,
-      data: {
-        amountPaid: Number(paymentForm.amountPaid),
-        paymentMethod: paymentForm.paymentMethod,
-        paymentDate: paymentForm.paymentDate || undefined,
-        notes: paymentForm.notes || null,
-      },
-    });
+    if (!paymentForm.paymentDate || paymentForm.paymentDate > todayStr()) {
+      toast({ title: "Tanggal tidak valid", description: "Pilih tanggal pembayaran sebenarnya yang tidak melebihi hari ini.", variant: "destructive" });
+      return;
+    }
+    paymentMutation.mutate({ id: paymentTarget.id, data: paymentForm, proof: paymentProof });
   }
 
   function openPayment(inv: Invoice) {
     setPaymentTarget(inv);
+    setPaymentProof(null);
     setPaymentForm({ ...EMPTY_PAYMENT, amountPaid: inv.outstandingAmount, paymentDate: todayStr() });
     setPaymentOpen(true);
   }
@@ -2811,10 +2822,23 @@ export default function TenantInvoices() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Tanggal Bayar">
-                <Input type="date" value={paymentForm.paymentDate} onChange={e => setPaymentForm(f => ({ ...f, paymentDate: e.target.value }))} />
+              <Field label="Tanggal Pembayaran Sebenarnya" required>
+                <Input type="date" max={todayStr()} value={paymentForm.paymentDate} onChange={e => setPaymentForm(f => ({ ...f, paymentDate: e.target.value }))} required />
               </Field>
             </div>
+            <Field label="Bukti Pembayaran (JPG, PNG, WebP, atau PDF; maks. 5 MB)">
+              <Input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e => {
+                const file = e.target.files?.[0] ?? null;
+                if (file && file.size > 5 * 1024 * 1024) {
+                  e.target.value = "";
+                  setPaymentProof(null);
+                  toast({ title: "Berkas terlalu besar", description: "Maksimal 5 MB.", variant: "destructive" });
+                  return;
+                }
+                setPaymentProof(file);
+              }} />
+              <p className="text-xs text-muted-foreground">Tanggal bayar mengikuti tanggal transfer, bukan tanggal input admin. Bukti akan tersimpan pada riwayat pembayaran.</p>
+            </Field>
             <Field label="Catatan">
               <Textarea value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Opsional..." />
             </Field>
@@ -2949,98 +2973,44 @@ export default function TenantInvoices() {
             </ScrollArea>
           ) : null}
           <DialogFooter className="flex-wrap gap-2">
-            <Button
-              variant="outline"
-              className="gap-2 text-violet-700 border-violet-200 hover:bg-violet-50 hover:text-violet-800"
-              onClick={() => {
-                if (detailData) {
-                  setPayHistoryInvoice(detailData);
-                  setPayHistoryOpen(true);
-                }
-              }}
-            >
-              <History className="h-4 w-4" />
-              Riwayat Pembayaran
-            </Button>
-            <Button variant="outline" onClick={() => { if (detailData) void viewOrPrintInvoice(detailData, "view"); }} className="gap-2 text-indigo-700 border-indigo-200 hover:bg-indigo-50 hover:text-indigo-800">
-              <Eye className="h-4 w-4" />
-              Lihat Invoice
-            </Button>
-            <Button
-              variant="outline"
-              className="gap-2 text-emerald-700 border-emerald-200 hover:bg-emerald-50 hover:text-emerald-800"
-              disabled={detailData ? downloadingId === detailData.id : false}
-              onClick={() => {
-                if (!detailData) return;
-                void downloadInvoicePdf(
-                  detailData,
-                  () => setDownloadingId(detailData.id),
-                  () => setDownloadingId(null),
-                );
-              }}
-            >
-              {detailData && downloadingId === detailData.id
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <Download className="h-4 w-4" />
-              }
-              {detailData && downloadingId === detailData.id ? "Memproses..." : "Download PDF"}
-            </Button>
-            <Button variant="outline" onClick={() => { if (detailData) void viewOrPrintInvoice(detailData, "print"); }} className="gap-2">
-              <Printer className="h-4 w-4" />
-              Print Invoice
-            </Button>
-            {detailData && detailData.status !== "cancelled" && detailData.phone && (
-              <Button
-                variant="outline"
-                className={`gap-2 ${detailData.status === "overdue" ? "border-red-300 text-red-600 hover:bg-red-50" : "border-green-300 text-green-700 hover:bg-green-50"}`}
-                disabled={waSendMutation.isPending}
-                onClick={() => waSendMutation.mutate({ id: detailData.id, type: detailData.status === "overdue" ? "overdue-reminder" : "send" })}
-              >
-                <MessageCircle className="h-4 w-4" />
-                {waSendMutation.isPending ? "Mengirim..." : detailData.status === "overdue" ? "Kirim Pengingat WA" : "Kirim Notif WA"}
-              </Button>
-            )}
-            {detailData && detailData.phone && (
-              <Button
-                variant="outline"
-                className="gap-2 border-violet-300 text-violet-700 hover:bg-violet-50 hover:text-violet-800"
-                disabled={sendingPdfId === detailData.id}
-                onClick={() => sendPdfMutation.mutate(detailData)}
-              >
-                {sendingPdfId === detailData.id
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <Send className="h-4 w-4" />
-                }
-                {sendingPdfId === detailData.id ? "Memproses PDF..." : "Kirim PDF ke WA"}
-              </Button>
-            )}
-            {detailData && detailData.status !== "cancelled" && Number(detailData.taxAmount) === 0 && Number(detailData.subtotal) > 0 && (
-              <Button
-                variant="outline"
-                className="gap-2 text-amber-700 border-amber-300 hover:bg-amber-50 hover:text-amber-800"
-                disabled={recalcMutation.isPending}
-                onClick={() => recalcMutation.mutate(detailData.id)}
-              >
-                {recalcMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                {recalcMutation.isPending ? "Menghitung..." : "Terapkan PPN 11%"}
-              </Button>
-            )}
-            {detailData && detailData.status !== "cancelled" && (
-              <Button
-                variant="outline"
-                className="gap-2 text-violet-700 border-violet-200 hover:bg-violet-50 hover:text-violet-800"
-                onClick={() => openEdit(detailData)}
-              >
-                <Pencil className="h-4 w-4" />
-                Edit Invoice
-              </Button>
-            )}
             {detailData && detailData.status !== "paid" && detailData.status !== "cancelled" && (
               <Button onClick={() => { setDetailOpen(false); openPayment(detailData); }} className="gap-2">
-                <CreditCard className="h-4 w-4" />
-                Input Pembayaran
+                <CreditCard className="h-4 w-4" /> Input Pembayaran
               </Button>
             )}
+            {detailData && detailData.status !== "cancelled" && detailData.phone && detailData.status !== "paid" && (
+              <Button variant="outline" className="gap-2" disabled={waSendMutation.isPending}
+                onClick={() => waSendMutation.mutate({ id: detailData.id, type: detailData.status === "overdue" ? "overdue-reminder" : "send" })}>
+                <MessageCircle className="h-4 w-4" />
+                {waSendMutation.isPending ? "Mengirim..." : "Kirim Tagihan WA"}
+              </Button>
+            )}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="gap-2">
+                  <ChevronDown className="h-4 w-4" /> Lainnya
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => {
+                  if (detailData) { setPayHistoryInvoice(detailData); setPayHistoryOpen(true); }
+                }}>Riwayat Pembayaran</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => { if (detailData) void viewOrPrintInvoice(detailData, "view"); }}>Lihat Invoice</DropdownMenuItem>
+                <DropdownMenuItem disabled={!!detailData && downloadingId === detailData.id} onSelect={() => {
+                  if (detailData) void downloadInvoicePdf(detailData, () => setDownloadingId(detailData.id), () => setDownloadingId(null));
+                }}>Download PDF</DropdownMenuItem>
+                <DropdownMenuItem onSelect={() => { if (detailData) void viewOrPrintInvoice(detailData, "print"); }}>Print Invoice</DropdownMenuItem>
+                {detailData?.phone && (
+                  <DropdownMenuItem disabled={sendingPdfId === detailData.id} onSelect={() => sendPdfMutation.mutate(detailData)}>Kirim PDF ke WA</DropdownMenuItem>
+                )}
+                {detailData && detailData.status !== "cancelled" && Number(detailData.taxAmount) === 0 && Number(detailData.subtotal) > 0 && (
+                  <DropdownMenuItem disabled={recalcMutation.isPending} onSelect={() => recalcMutation.mutate(detailData.id)}>Terapkan PPN 11%</DropdownMenuItem>
+                )}
+                {detailData && detailData.status !== "cancelled" && (
+                  <DropdownMenuItem onSelect={() => openEdit(detailData)}>Edit Invoice</DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </DialogFooter>
         </DialogContent>
       </Dialog>
