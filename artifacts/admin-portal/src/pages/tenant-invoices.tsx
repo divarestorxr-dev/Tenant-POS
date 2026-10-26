@@ -2761,7 +2761,7 @@ export default function TenantInvoices() {
 
       {/* ─── Dialog: Input Pembayaran ─────────────────────────────────────────── */}
       <Dialog open={paymentOpen} onOpenChange={(o) => { if (!o) { setPaymentOpen(false); setPaymentTarget(null); } }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-[600px] max-h-[90vh] overflow-y-auto p-5 sm:p-6">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CreditCard className="h-4 w-4" />
@@ -2769,12 +2769,12 @@ export default function TenantInvoices() {
             </DialogTitle>
           </DialogHeader>
           {paymentTarget && (
-            <div className="bg-muted/40 rounded-lg p-3 text-sm mb-1">
+            <div className="rounded-xl border bg-muted/30 p-4 text-sm space-y-2">
               <p className="font-mono font-medium text-xs text-muted-foreground">{paymentTarget.invoiceNumber}</p>
-              <p className="font-semibold">{paymentTarget.tenantName}</p>
-              <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
-                <span>Total: <strong className="text-foreground">{formatRupiah(paymentTarget.totalAmount)}</strong></span>
-                <span>Sisa: <strong className="text-orange-600">{formatRupiah(paymentTarget.outstandingAmount)}</strong></span>
+              <p className="font-semibold text-base break-words">{paymentTarget.tenantName}</p>
+              <div className="grid grid-cols-2 gap-3 border-t pt-3 text-xs text-muted-foreground">
+                <span className="flex flex-col gap-1">Total tagihan<strong className="text-sm text-foreground">{formatRupiah(paymentTarget.totalAmount)}</strong></span>
+                <span className="flex flex-col gap-1">Sisa tagihan<strong className="text-sm text-orange-600">{formatRupiah(paymentTarget.outstandingAmount)}</strong></span>
               </div>
             </div>
           )}
@@ -2791,14 +2791,17 @@ export default function TenantInvoices() {
               </div>
             </div>
           )}
-          <form id="payment-form" onSubmit={handlePaymentSubmit} className="flex flex-col gap-4 py-1">
+          <form id="payment-form" onSubmit={handlePaymentSubmit} className="flex flex-col gap-5 py-2">
             <Field label="Jumlah Bayar (Rp)" required>
-              <Input
-                type="number" min="1"
-                value={paymentForm.amountPaid}
-                onChange={e => setPaymentForm(f => ({ ...f, amountPaid: e.target.value }))}
-                placeholder="0"
-              />
+              <div className="relative">
+                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">Rp</span>
+                <Input
+                  type="text" inputMode="numeric" autoComplete="off" className="h-11 pl-10 text-base font-semibold tabular-nums"
+                  value={paymentForm.amountPaid ? Number(paymentForm.amountPaid).toLocaleString("id-ID") : ""}
+                  onChange={e => setPaymentForm(f => ({ ...f, amountPaid: e.target.value.replace(/\D/g, "") }))}
+                  placeholder="0"
+                />
+              </div>
             </Field>
             {paymentTarget && activeSite?.type === "sport_center" && Number(paymentForm.amountPaid || 0) > Number(paymentTarget.outstandingAmount || 0) && (
               <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm">
@@ -2809,10 +2812,10 @@ export default function TenantInvoices() {
                 </p>
               </div>
             )}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 [&>div]:min-w-0">
               <Field label="Metode Pembayaran">
                 <Select value={paymentForm.paymentMethod} onValueChange={(v) => setPaymentForm(f => ({ ...f, paymentMethod: v as PaymentForm["paymentMethod"] }))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="h-11 w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="tunai">Tunai</SelectItem>
                     <SelectItem value="transfer">Transfer</SelectItem>
@@ -2822,12 +2825,13 @@ export default function TenantInvoices() {
                   </SelectContent>
                 </Select>
               </Field>
-              <Field label="Tanggal Pembayaran Sebenarnya" required>
-                <Input type="date" max={todayStr()} value={paymentForm.paymentDate} onChange={e => setPaymentForm(f => ({ ...f, paymentDate: e.target.value }))} required />
+              <Field label="Tanggal Bayar" required>
+                <Input className="h-11 w-full min-w-0" type="date" max={todayStr()} value={paymentForm.paymentDate} onChange={e => setPaymentForm(f => ({ ...f, paymentDate: e.target.value }))} required />
               </Field>
             </div>
-            <Field label="Bukti Pembayaran (JPG, PNG, WebP, atau PDF; maks. 5 MB)">
-              <Input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e => {
+            <Field label="Bukti Pembayaran">
+              <p className="text-xs text-muted-foreground">JPG, PNG, WebP atau PDF · Maksimal 5 MB</p>
+              <Input className="h-11 w-full cursor-pointer pt-2 file:mr-3 file:rounded-md file:border-0 file:bg-muted file:px-3 file:py-1 file:text-xs file:font-medium" type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={e => {
                 const file = e.target.files?.[0] ?? null;
                 if (file && file.size > 5 * 1024 * 1024) {
                   e.target.value = "";
@@ -2837,15 +2841,15 @@ export default function TenantInvoices() {
                 }
                 setPaymentProof(file);
               }} />
-              <p className="text-xs text-muted-foreground">Tanggal bayar mengikuti tanggal transfer, bukan tanggal input admin. Bukti akan tersimpan pada riwayat pembayaran.</p>
+              <p className="text-xs leading-relaxed text-muted-foreground">Gunakan tanggal transfer sebenarnya, bukan tanggal input admin. Bukti tersimpan di riwayat pembayaran.</p>
             </Field>
             <Field label="Catatan">
-              <Textarea value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Opsional..." />
+              <Textarea className="min-h-[76px] resize-y" value={paymentForm.notes} onChange={e => setPaymentForm(f => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Opsional..." />
             </Field>
           </form>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setPaymentOpen(false); setPaymentTarget(null); }}>Batal</Button>
-            <Button type="submit" form="payment-form" disabled={paymentMutation.isPending}>
+          <DialogFooter className="gap-2 border-t pt-4 sm:justify-end">
+            <Button type="button" variant="outline" className="min-w-24" onClick={() => { setPaymentOpen(false); setPaymentTarget(null); setPaymentProof(null); }}>Batal</Button>
+            <Button type="submit" form="payment-form" className="min-w-40" disabled={paymentMutation.isPending || pendingProofCheck?.hasPending}>
               {paymentMutation.isPending ? "Memproses..." : "Catat Pembayaran"}
             </Button>
           </DialogFooter>
