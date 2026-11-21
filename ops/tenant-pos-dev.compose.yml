@@ -26,7 +26,9 @@ services:
     tmpfs:
       - /tmp:size=64m,mode=1777
     networks:
-      - isolated
+      isolated:
+        # Default matches the health upstream on the existing VPS DEV private network.
+        ipv4_address: "${TENANT_POS_DEV_API_IPV4-172.28.0.3}"
 networks:
   isolated:
     name: tenant-pos-dev-isolated
