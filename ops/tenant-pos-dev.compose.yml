@@ -15,6 +15,7 @@ services:
       PORT: "19051"
       DEPLOY_COMMIT_SHA: "${TENANT_POS_DEV_COMMIT_SHA:?required}"
       APP_ENV: development
+      TENANT_POS_BACKGROUND_MODE: on-demand
       ENABLE_DEV_LOGIN: "false"
       DATABASE_URL: "${TENANT_POS_DEV_DATABASE_URL:?required}"
       SUPABASE_PG_URL_DEV: "${TENANT_POS_DEV_DATABASE_URL:?required}"

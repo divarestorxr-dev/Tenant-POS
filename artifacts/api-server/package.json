@@ -9,6 +9,8 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run --config vitest.config.ts",
+    "test:background": "vitest run --config vitest.background.config.ts",
+    "test:runtime": "node ./scripts/verify-logger-relocation.mjs && node ./scripts/verify-process-errors.mjs",
     "test:watch": "vitest --config vitest.config.ts",
     "test:coverage": "vitest run --config vitest.config.ts --coverage",
     "compress:storage-images": "node ./scripts/compress-supabase-images.mjs"

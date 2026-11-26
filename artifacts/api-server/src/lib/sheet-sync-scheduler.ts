@@ -11,6 +11,7 @@ import {
   type MatchContext,
 } from "../services/bank-matcher";
 import { logger } from "./logger";
+import { getBackgroundWorkMode } from "./background-work-policy";
 
 const SYNC_CONFIG_KEY = "bank_rekon_sync_config";
 
@@ -18,6 +19,10 @@ let _timer: ReturnType<typeof setTimeout> | null = null;
 let _isRunning = false;
 
 export function startSheetSyncScheduler(): void {
+  if (getBackgroundWorkMode() === "on-demand") {
+    logger.info("[sheet-sync] Mode on-demand aktif — menunggu permintaan sinkronisasi terautentikasi");
+    return;
+  }
   scheduleNext();
   logger.info("[sheet-sync] Scheduler sinkronisasi Google Sheets aktif");
 }

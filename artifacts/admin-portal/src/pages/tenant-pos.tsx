@@ -2895,6 +2895,8 @@ function ModalTambahTenant({
 // ─── Receipt History Modal ────────────────────────────────────────────────────
 
 type ReceiptListItem = ReceiptInfo & {
+  integrityStatus?: "verified_reference" | "historical_reference_missing";
+  integrityMessage?: string | null;
   ownerName: string | null;
   unitCode: string | null;
   paymentMethod: string | null;
@@ -3071,6 +3073,9 @@ function ReceiptHistoryModal({ onClose }: { onClose: () => void }) {
                     <tr key={item.id} className="hover:bg-slate-50/70 transition-colors">
                       <td className="px-4 py-2.5">
                         <span className="font-mono text-[11px] text-slate-600">{item.receiptNumber}</span>
+                        {item.integrityStatus === "historical_reference_missing" && (
+                          <p title={item.integrityMessage ?? "Referensi arsip tidak tersedia"} className="mt-1 text-[10px] font-semibold text-amber-700">Arsip lama — perlu verifikasi</p>
+                        )}
                       </td>
                       <td className="px-3 py-2.5">
                         <p className="font-medium text-slate-800 text-xs leading-tight">{item.businessName ?? "—"}</p>

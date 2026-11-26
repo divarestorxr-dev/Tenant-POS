@@ -6,6 +6,7 @@ import { sendInvoiceNotification, sendOverdueReminder, sendDueReminder, getAdmin
 import { logger } from "./logger";
 import { getBaseUrl } from "./app-url";
 import { isTenantPosWaOnline, getTenantPosMessageStatus } from "./whatsapp-gateway-client";
+import { getBackgroundWorkMode, type BackgroundWorkMode } from "./background-work-policy";
 
 let _started = false;
 
@@ -15,7 +16,6 @@ const SCHEDULE_HOURS_UTC = [1];
 
 let _lastRunDateKey = "";
 let _reconciliationTickInFlight = false;
-let _lastDeferredDateKey = ""; // format: "YYYY-MM-DD-HH"
 
 // ─── Status tracker (diakses oleh route /blast-tagihan/status) ────────────────
 
@@ -31,6 +31,7 @@ export interface BlastRun {
 }
 
 export interface BlastStatus {
+  backgroundMode: BackgroundWorkMode;
   lastRunAt: string | null;
   lastRunLabel: string | null;
   lastResult: {
@@ -45,7 +46,7 @@ export interface BlastStatus {
   isRunning: boolean;
 }
 
-let _blastStatus: BlastStatus = {
+let _blastStatus: Omit<BlastStatus, "backgroundMode"> = {
   lastRunAt: null,
   lastRunLabel: null,
   lastResult: null,
@@ -56,7 +57,12 @@ let _blastStatus: BlastStatus = {
 let _blastHistory: BlastRun[] = [];
 
 export function getBlastStatus(): BlastStatus {
-  return { ..._blastStatus };
+  const backgroundMode = getBackgroundWorkMode();
+  return {
+    ..._blastStatus,
+    backgroundMode,
+    nextScheduledHoursUtc: backgroundMode === "scheduled" ? [...SCHEDULE_HOURS_UTC] : [],
+  };
 }
 
 export function getBlastHistory(): BlastRun[] {
@@ -327,6 +333,10 @@ export async function runManualBlast(label: string): Promise<void> {
 
 export function startOverdueScheduler(): void {
   if (_started) return;
+  if (getBackgroundWorkMode() === "on-demand") {
+    logger.info("[scheduler] Mode on-demand aktif — menunggu permintaan blast terautentikasi");
+    return;
+  }
   _started = true;
 
   // Startup catch-up: jika service baru hidup setelah jadwal 08:00 WIB,

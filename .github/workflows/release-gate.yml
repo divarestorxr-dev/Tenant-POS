@@ -75,6 +75,10 @@ jobs:
           pnpm --filter @workspace/db migrate
       - name: API tests
         run: pnpm --filter @workspace/api-server test
+      - name: Runtime worker and logger regression tests
+        run: |
+          pnpm --filter @workspace/api-server test:background
+          pnpm --filter @workspace/api-server test:runtime
       - name: Admin Portal tests
         run: pnpm --filter @workspace/admin-portal test
       - name: Typecheck

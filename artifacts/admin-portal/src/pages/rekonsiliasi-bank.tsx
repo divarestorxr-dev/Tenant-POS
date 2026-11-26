@@ -39,6 +39,7 @@ function fmtWaktu(s: string | null | undefined) {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface SyncConfig {
+  backgroundMode?: "on-demand" | "scheduled";
   enabled: boolean;
   spreadsheetId: string;
   sheetName: string;
@@ -159,15 +160,10 @@ function ServiceAccountPanel() {
 
 // ─── Sync Config Card ─────────────────────────────────────────────────────────
 
-function SyncConfigCard() {
+function SyncConfigCard({ cfg, isLoading }: { cfg?: SyncConfig; isLoading: boolean }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-
-  const { data: cfg, isLoading } = useQuery<SyncConfig>({
-    queryKey: ["bank-rekon-sync-config"],
-    queryFn: () => apiFetch("/api/bank-reconciliation/sync-config").then((r) => r.json()),
-    staleTime: 30_000,
-  });
+  const isOnDemand = cfg?.backgroundMode === "on-demand";
 
   const [spreadsheetId, setSpreadsheetId] = useState("");
   const [sheetName, setSheetName] = useState("");
@@ -186,7 +182,7 @@ function SyncConfigCard() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          enabled: true,
+          enabled: isOnDemand ? (cfg?.enabled ?? false) : true,
           spreadsheetId: spreadsheetId.trim(),
           sheetName: sheetName.trim(),
           bankAccountId: cfg?.bankAccountId ?? "",
@@ -220,8 +216,13 @@ function SyncConfigCard() {
           Konfigurasi Spreadsheet
         </CardTitle>
         <CardDescription>
-          Hubungkan rekonsiliasi bank dengan Google Sheets untuk sinkronisasi otomatis.
+          {isOnDemand
+            ? "Atur spreadsheet, lalu jalankan sinkronisasi melalui tombol Sinkron dari Sheet Sekarang."
+            : "Hubungkan rekonsiliasi bank dengan Google Sheets untuk sinkronisasi otomatis."}
         </CardDescription>
+        {isOnDemand && (
+          <Badge variant="secondary" className="w-fit">On-demand · Sinkron manual</Badge>
+        )}
       </CardHeader>
       <CardContent className="space-y-4">
         {isLoading ? (
@@ -302,9 +303,11 @@ function SyncConfigCard() {
 // ─── Action Buttons ───────────────────────────────────────────────────────────
 
 function ActionButtons({
+  cfg,
   onSyncDone,
   onExportDone,
 }: {
+  cfg?: SyncConfig;
   onSyncDone: () => void;
   onExportDone: (url: string) => void;
 }) {
@@ -334,12 +337,6 @@ function ActionButtons({
     onError: (e: Error) => {
       toast({ title: "Sinkronisasi gagal", description: e.message, variant: "destructive" });
     },
-  });
-
-  const { data: cfg } = useQuery<SyncConfig>({
-    queryKey: ["bank-rekon-sync-config"],
-    queryFn: () => apiFetch("/api/bank-reconciliation/sync-config").then((r) => r.json()),
-    staleTime: 30_000,
   });
 
   const exportMutation = useMutation({
@@ -577,6 +574,12 @@ function MutationsTable() {
 export default function RekonsiliasiBank() {
   const [lastSheetUrl, setLastSheetUrl] = useState<string | null>(null);
   const qc = useQueryClient();
+  const { data: syncConfig, isLoading: isSyncConfigLoading } = useQuery<SyncConfig>({
+    queryKey: ["bank-rekon-sync-config"],
+    queryFn: () => apiFetch("/api/bank-reconciliation/sync-config").then((r) => r.json()),
+    staleTime: 30_000,
+  });
+  const isOnDemand = syncConfig?.backgroundMode === "on-demand";
 
   const handleSyncDone = useCallback(() => {
     qc.invalidateQueries({ queryKey: ["bank-mutations"] });
@@ -597,7 +600,9 @@ export default function RekonsiliasiBank() {
             Rekonsiliasi Bank — Google Sheets
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Sinkronisasi mutasi bank dari Google Sheets dan ekspor laporan rekonsiliasi secara otomatis.
+            {isOnDemand
+              ? "Sinkronisasi mutasi bank dari Google Sheets dan ekspor laporan rekonsiliasi sesuai permintaan."
+              : "Sinkronisasi mutasi bank dari Google Sheets dan ekspor laporan rekonsiliasi secara otomatis."}
           </p>
         </div>
         {lastSheetUrl && (
@@ -618,7 +623,7 @@ export default function RekonsiliasiBank() {
 
       {/* Config + Actions */}
       <div className="grid gap-4 md:grid-cols-2">
-        <SyncConfigCard />
+        <SyncConfigCard cfg={syncConfig} isLoading={isSyncConfigLoading} />
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -630,7 +635,7 @@ export default function RekonsiliasiBank() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <ActionButtons onSyncDone={handleSyncDone} onExportDone={handleExportDone} />
+            <ActionButtons cfg={syncConfig} onSyncDone={handleSyncDone} onExportDone={handleExportDone} />
             <Separator />
             <div className="space-y-2 text-xs text-muted-foreground">
               <p><strong>Sinkron dari Sheet:</strong> mengimpor baris mutasi baru dari spreadsheet input, melewati baris yang sudah ada (berdasarkan mutation_key), lalu menjalankan auto-matching.</p>
