@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getCstWaGatewayStatus,
+  isTenantPosWaOnline,
+  getTenantPosMessageStatus,
   isCstWaGatewayConfigured,
   normalizeWhatsappDestination,
   sendGatewayGroupText,
@@ -33,6 +35,32 @@ describe("CST WA Gateway client", () => {
     else process.env.CST_WA_DEVICE_ID = original.device;
     if (original.timeout === undefined) delete process.env.CST_WA_GATEWAY_TIMEOUT_MS;
     else process.env.CST_WA_GATEWAY_TIMEOUT_MS = original.timeout;
+  });
+
+  it("preflight only accepts a fresh ONLINE tenant-pos device", async () => {
+    const mock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ devices: [{
+      deviceId: "tenant-pos-01", enabled: true, status: "ONLINE",
+      lastHeartbeatAt: new Date().toISOString(),
+    }] }), { status: 200 }));
+    vi.stubGlobal("fetch", mock);
+    expect(await isTenantPosWaOnline()).toBe(true);
+    mock.mockResolvedValueOnce(new Response(JSON.stringify({ devices: [{
+      deviceId: "tenant-pos-01", enabled: true, status: "QR_REQUIRED", lastHeartbeatAt: new Date().toISOString(),
+    }] }), { status: 200 }));
+    expect(await isTenantPosWaOnline()).toBe(false);
+    mock.mockResolvedValueOnce(new Response(JSON.stringify({ devices: [{
+      deviceId: "tenant-pos-01", enabled: true, status: "ONLINE", lastHeartbeatAt: "2026-01-01T00:00:00Z",
+    }] }), { status: 200 }));
+    expect(await isTenantPosWaOnline()).toBe(false);
+  });
+
+  it("uses authenticated, read-only message lookup and never labels queued as sent", async () => {
+    const mock = vi.fn().mockResolvedValue(new Response(JSON.stringify({status:"queued"}),{status:200}));
+    vi.stubGlobal("fetch",mock);
+    expect(await getTenantPosMessageStatus("f13d3834-2222-4444-8888-bfef91969e10")).toBe("queued");
+    expect(mock.mock.calls[0][0]).toContain("/v1/messages/f13d3834-2222-4444-8888-bfef91969e10");
+    mock.mockResolvedValueOnce(new Response(JSON.stringify({status:"failed"}),{status:200}));
+    expect(await getTenantPosMessageStatus("f13d3834-2222-4444-8888-bfef91969e10")).toBe("failed");
   });
 
   it("normalizes Indonesian phone numbers and preserves group JID", () => {

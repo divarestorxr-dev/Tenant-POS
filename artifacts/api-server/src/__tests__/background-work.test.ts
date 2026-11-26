@@ -37,6 +37,11 @@ vi.mock("../lib/whatsapp", () => ({
   getAdminNotifyPhones: vi.fn(),
   getSiteCompanyName: vi.fn(),
   notifyAdminGroup: vi.fn(),
+  resetAdminGroupNotificationDedupe: vi.fn(),
+}));
+vi.mock("../lib/whatsapp-gateway-client", () => ({
+  isTenantPosWaOnline: async () => true,
+  getTenantPosMessageStatus: async () => "queued",
 }));
 vi.mock("../lib/app-url", () => ({ getBaseUrl: vi.fn() }));
 vi.mock("../services/google-sheets", () => ({
@@ -53,7 +58,7 @@ vi.mock("../services/bank-matcher", () => ({
 
 function selection(rows: unknown[]) {
   const chain: Record<string, unknown> = {};
-  for (const method of ["from", "innerJoin", "leftJoin", "where", "limit"]) {
+  for (const method of ["from", "innerJoin", "leftJoin", "where", "orderBy", "limit"]) {
     chain[method] = () => chain;
   }
   chain.then = (resolve: (value: unknown[]) => unknown, reject: (error: unknown) => unknown) =>
@@ -88,7 +93,7 @@ beforeEach(() => {
   vi.stubEnv("TENANT_POS_BACKGROUND_MODE", "");
   mocks.execute.mockResolvedValue({ rows: [] });
   mocks.select.mockImplementation((fields: Record<string, unknown>) => selection(
-    "forceLogoutAt" in fields ? [{ status: "active", forceLogoutAt: null }] : [],
+    fields && "forceLogoutAt" in fields ? [{ status: "active", forceLogoutAt: null }] : [],
   ));
   mocks.readFromSheet.mockResolvedValue([]);
 });
@@ -220,9 +225,9 @@ describe("scheduled mode compatibility", () => {
     overdue.startOverdueScheduler();
 
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(overdue.getBlastHistory().filter((run) => run.label === "cron 1:00 UTC")).toHaveLength(1);
+    expect(overdue.getBlastHistory().filter((run) => run.label.startsWith("cron/catch-up"))).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
-    expect(overdue.getBlastHistory().filter((run) => run.label === "cron 1:00 UTC")).toHaveLength(1);
+    expect(overdue.getBlastHistory().filter((run) => run.label.startsWith("cron/catch-up"))).toHaveLength(1);
   });
 });
 

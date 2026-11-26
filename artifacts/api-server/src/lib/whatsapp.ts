@@ -977,7 +977,11 @@ async function recordAdminGroupDelivery(
         ? "queued"
         : "accepted";
 
-  const errorMessage = result.error ?? null;
+  const gatewayId = result.pending && result.response && typeof result.response === "object"
+    ? (result.response as { messageId?: unknown }).messageId
+    : null;
+  const errorMessage = typeof gatewayId === "string" && /^[0-9a-f-]{16,64}$/i.test(gatewayId)
+    ? `gateway:${gatewayId}` : (result.error ?? null);
 
   try {
     await db.insert(waLogsTable).values({
@@ -1009,6 +1013,13 @@ export function getAdminWaGroupStatus(): { configured: boolean; valid: boolean }
     configured: groupJid.length > 0,
     valid: /^\d+@g\.us$/.test(groupJid),
   };
+}
+
+/** Called only after a durable gateway FAILED receipt to permit a distinct retry. */
+export function resetAdminGroupNotificationDedupe(params: AdminGroupPaymentParams): void {
+  const groupJid = process.env.ADMIN_WA_GROUP?.trim() ?? "";
+  const key = [groupJid, params.eventType, params.receiptNumber ?? "", params.invoiceNumber ?? "", String(params.amount)].join("|");
+  groupNotificationCache.delete(key);
 }
 
 export async function notifyAdminGroup(params: AdminGroupPaymentParams): Promise<WaResult> {
