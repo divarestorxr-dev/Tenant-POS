@@ -2,9 +2,10 @@ import { db } from "@workspace/db";
 import { tenantInvoicesTable, tenantsTable, bankMutationsTable, waLogsTable } from "@workspace/db/schema";
 import { and, inArray, isNull, eq, sql } from "drizzle-orm";
 import { createAllInvoicesForBooking, countContractBillingPeriods } from "./auto-invoice";
-import { sendInvoiceNotification, sendOverdueReminder, sendDueReminder, getAdminNotifyPhones, getSiteCompanyName, notifyAdminGroup } from "./whatsapp";
+import { sendInvoiceNotification, sendOverdueReminder, sendDueReminder, getAdminNotifyPhones, getSiteCompanyName, notifyAdminGroup, resetAdminGroupNotificationDedupe } from "./whatsapp";
 import { logger } from "./logger";
 import { getBaseUrl } from "./app-url";
+import { isTenantPosWaOnline, getTenantPosMessageStatus } from "./whatsapp-gateway-client";
 
 let _started = false;
 
@@ -12,7 +13,9 @@ let _started = false;
 // Eksekusi rutin sekali sehari pukul 08:00 WIB (01:00 UTC).
 const SCHEDULE_HOURS_UTC = [1];
 
-let _lastRunDateKey = ""; // format: "YYYY-MM-DD-HH"
+let _lastRunDateKey = "";
+let _reconciliationTickInFlight = false;
+let _lastDeferredDateKey = ""; // format: "YYYY-MM-DD-HH"
 
 // ─── Status tracker (diakses oleh route /blast-tagihan/status) ────────────────
 
@@ -68,6 +71,7 @@ async function recordSchedulerWa(params: {
   messageType: "invoice_scheduler" | "due_reminder" | "overdue_reminder";
   status: "accepted" | "queued" | "failed" | "skipped";
   errorMessage?: string | null;
+  gatewayMessageId?: string | null;
 }): Promise<void> {
   try {
     await db.insert(waLogsTable).values({
@@ -77,13 +81,134 @@ async function recordSchedulerWa(params: {
       phone: params.phone,
       messageType: params.messageType,
       status: params.status,
-      errorMessage: params.errorMessage ?? null,
+      errorMessage: params.gatewayMessageId ? `gateway:${params.gatewayMessageId}` : (params.errorMessage ?? null),
       sentBy: "scheduler",
     });
   } catch (err) {
     // Logging delivery tidak boleh menggagalkan notifikasi utama.
     logger.warn({ err, invoiceId: params.invoiceId }, "[scheduler] Gagal menyimpan WA delivery log");
   }
+}
+
+/** Queue acceptance is not delivery. Reconcile persisted gateway IDs even after a restart. */
+export async function reconcileScheduledWaDeliveries(): Promise<{ sent: number; failed: number; pending: number }> {
+  const stats = { sent: 0, failed: 0, pending: 0 };
+  const logs = await db.select().from(waLogsTable).where(and(
+    inArray(waLogsTable.sentBy, ["scheduler", "admin_group"]),
+    eq(waLogsTable.status, "queued"),
+    sql`${waLogsTable.errorMessage} LIKE 'gateway:%'`,
+  )).orderBy(waLogsTable.id).limit(100);
+
+  for (const log of logs) {
+    const messageId = log.errorMessage?.slice("gateway:".length) ?? "";
+    const status = await getTenantPosMessageStatus(messageId);
+    if (status === "unknown" || status === "queued" || status === "processing") {
+      stats.pending++;
+      continue;
+    }
+    const confirmed = status === "sent" || status === "delivered" || status === "read";
+    const updated = await db.update(waLogsTable).set({
+      status: confirmed ? "sent" : "failed",
+      errorMessage: confirmed ? `gateway:${messageId}` : `gateway_failed:${messageId}`,
+    }).where(and(eq(waLogsTable.id, log.id), eq(waLogsTable.status, "queued")))
+      .returning({ id: waLogsTable.id });
+    if (!updated.length) continue;
+    if (confirmed) { stats.sent++; continue; }
+    stats.failed++;
+    if (log.invoiceId == null || log.sentBy === "admin_group") continue;
+
+    // Release only the claim associated with this attempt. Never change paid
+    // invoices or a newer claim (e.g. a different day's scheduled reminder).
+    const claimColumn = log.messageType === "overdue_reminder"
+      ? tenantInvoicesTable.lastOverdueReminderAt
+      : log.messageType === "due_reminder"
+        ? tenantInvoicesTable.lastPaymentReminderAt
+        : log.messageType === "invoice_scheduler"
+          ? tenantInvoicesTable.invoiceNotifiedAt
+          : null;
+    if (!claimColumn) continue;
+    const claimValue = claimColumn === tenantInvoicesTable.lastOverdueReminderAt
+      ? { lastOverdueReminderAt: null }
+      : claimColumn === tenantInvoicesTable.lastPaymentReminderAt
+        ? { lastPaymentReminderAt: null }
+        : { invoiceNotifiedAt: null };
+    await db.update(tenantInvoicesTable).set({ ...claimValue, updatedAt: new Date() }).where(and(
+      eq(tenantInvoicesTable.id, log.invoiceId),
+      inArray(tenantInvoicesTable.status, ["unpaid", "partial", "overdue"]),
+      sql`COALESCE(${tenantInvoicesTable.outstandingAmount}, 0)::numeric > 0`,
+      sql`${claimColumn} IS NOT NULL AND ${claimColumn} <= ${log.createdAt}`,
+      sql`DATE(${claimColumn} AT TIME ZONE 'Asia/Jakarta') = DATE(${log.createdAt} AT TIME ZONE 'Asia/Jakarta')`,
+    ));
+  }
+  return stats;
+}
+
+/** Recover admin-group overdue notifications independently of tenant send status. */
+export async function recoverFailedOverdueAdminGroup(): Promise<number> {
+  const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+  const failures = await db.select().from(waLogsTable).where(and(
+    eq(waLogsTable.sentBy, "admin_group"),
+    eq(waLogsTable.messageType, "admin_group_overdue"),
+    eq(waLogsTable.status, "failed"),
+    sql`DATE(${waLogsTable.createdAt} AT TIME ZONE 'Asia/Jakarta') = ${today}::date`,
+  )).orderBy(waLogsTable.id).limit(100);
+  let retried = 0;
+  for (const failure of failures) {
+    if (failure.invoiceId == null) continue;
+    // Process only the latest attempt. A newer queued, sent OR failed attempt
+    // prevents replaying historical failures more than once per tick.
+    const attempts = await db.select({ id: waLogsTable.id, status: waLogsTable.status }).from(waLogsTable).where(and(
+      eq(waLogsTable.invoiceId, failure.invoiceId),
+      eq(waLogsTable.messageType, "admin_group_overdue"),
+      eq(waLogsTable.sentBy, "admin_group"),
+      sql`DATE(${waLogsTable.createdAt} AT TIME ZONE 'Asia/Jakarta') = ${today}::date`,
+    )).orderBy(waLogsTable.id);
+    if (attempts.length >= 3 || attempts.at(-1)?.id !== failure.id) continue;
+    const rows = await db.select({
+      id: tenantInvoicesTable.id,
+      invoiceNumber: tenantInvoicesTable.invoiceNumber,
+      siteId: tenantInvoicesTable.siteId,
+      tenantId: tenantInvoicesTable.tenantId,
+      outstandingAmount: tenantInvoicesTable.outstandingAmount,
+      dueDate: tenantInvoicesTable.dueDate,
+      paymentToken: tenantInvoicesTable.paymentToken,
+      ownerName: tenantsTable.ownerName,
+      businessName: tenantsTable.businessName,
+    }).from(tenantInvoicesTable)
+      .innerJoin(tenantsTable, eq(tenantInvoicesTable.tenantId, tenantsTable.id))
+      .where(and(
+        eq(tenantInvoicesTable.id, failure.invoiceId),
+        inArray(tenantInvoicesTable.status, ["unpaid", "partial", "overdue"]),
+        sql`${tenantsTable.status} IN ('aktif', 'active')`,
+        sql`COALESCE(${tenantInvoicesTable.outstandingAmount}, 0)::numeric > 0`,
+        sql`${tenantInvoicesTable.dueDate} < (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Jakarta')::date`,
+      )).limit(1);
+    const invoice = rows[0];
+    if (!invoice) continue;
+    const params = {
+      eventType: "overdue" as const,
+      ownerName: invoice.ownerName,
+      businessName: invoice.businessName,
+      invoiceNumber: invoice.invoiceNumber,
+      amount: invoice.outstandingAmount ?? "0",
+      daysOverdue: invoice.dueDate ? Math.max(0, Math.floor((Date.now() - new Date(invoice.dueDate).getTime()) / 86400000)) : 0,
+      paymentLink: await buildPaymentLink(invoice.paymentToken),
+      siteId: invoice.siteId,
+      tenantId: invoice.tenantId,
+      invoiceId: invoice.id,
+    };
+    resetAdminGroupNotificationDedupe(params);
+    const result = await notifyAdminGroup(params);
+    if (result.ok && !result.skipped) retried++;
+  }
+  return retried;
+}
+
+function gatewayMessageIdFromResult(result: { response?: unknown }): string | null {
+  const r = result.response;
+  if (!r || typeof r !== "object") return null;
+  const v = (r as { messageId?: unknown }).messageId;
+  return typeof v === "string" && /^[0-9a-f-]{16,64}$/i.test(v) ? v : null;
 }
 
 async function releaseInvoiceNotificationClaim(invoiceId: number, claimedAt: Date): Promise<void> {
@@ -136,6 +261,12 @@ async function runAllChecks(label: string, includeOverdue = true): Promise<void>
       logger.warn({ err }, "[scheduler] Pembuatan invoice bulanan gagal");
       return 0;
     });
+
+    // Fail closed: do not claim an invoice merely because the gateway API is up.
+    if (!(await isTenantPosWaOnline())) {
+      logger.warn("[scheduler] tenant-pos offline: postpone WA, keep invoice claims untouched");
+      return;
+    }
 
     // 2. Kirim notifikasi WA secara paralel
     const [invoicesSent, dueResult, overdueSent] = await Promise.all([
@@ -234,19 +365,33 @@ export function startOverdueScheduler(): void {
     const hourUtc = now.getUTCHours();
     const dateKey = `${now.toISOString().slice(0, 10)}-${hourUtc}`;
 
-    const isRegularWindow = SCHEDULE_HOURS_UTC.includes(hourUtc);
-
-    // Eksekusi hanya pada window rutin 08:00 WIB dan belum dijalankan pada jam ini.
-    // Date key diklaim sebelum await supaya dua tick dalam window yang sama
-    // tidak bisa memulai blast kedua saat blast pertama masih berjalan.
-    if (isRegularWindow && dateKey !== _lastRunDateKey) {
-      _lastRunDateKey = dateKey;
-      try {
-        const label = `cron ${hourUtc}:00 UTC`;
-        await runAllChecks(label, true);
-      } catch (err) {
-        logger.warn({ err }, "[scheduler] Cron blast gagal");
+    const dayKey = now.toISOString().slice(0, 10);
+    const hourWib = (hourUtc + 7) % 24;
+    if (_reconciliationTickInFlight) return;
+    _reconciliationTickInFlight = true;
+    try {
+      // At 08:00, defer while offline; keep checking every five minutes until
+      // online. From 08:00-21:59, reconcile confirmed delivery failures.
+      if (hourWib < 8 || hourWib >= 22) return;
+      if (!(await isTenantPosWaOnline())) {
+        return;
       }
+      const delivery = await reconcileScheduledWaDeliveries();
+      await recoverFailedOverdueAdminGroup();
+      if (_lastRunDateKey !== dayKey) {
+        await runAllChecks(`cron/catch-up ${dateKey}`, true);
+        if (_blastStatus.lastRunLabel === `cron/catch-up ${dateKey}`) {
+          _lastRunDateKey = dayKey;
+        }
+      } else if (delivery.failed > 0) {
+        // Only confirmed failures may reopen invoice claims. The new query
+        // rechecks balance, active tenant and paid status before sending.
+        await runAllChecks(`confirmed failed delivery recovery ${dateKey}`, true);
+      }
+    } catch (err) {
+      logger.warn({ err }, "[scheduler] Rekonsiliasi WA / catch-up gagal");
+    } finally {
+      _reconciliationTickInFlight = false;
     }
   }, 5 * 60 * 1000); // setiap 5 menit
 
@@ -481,6 +626,7 @@ export async function runInvoiceNotificationCheck(): Promise<number> {
           messageType: "invoice_scheduler",
           status: result.pending ? "queued" : "accepted",
           errorMessage: result.pending ? "CST WA Gateway queued" : null,
+          gatewayMessageId: result.pending ? gatewayMessageIdFromResult(result) : null,
         });
 
         // CST WA Gateway process=pending berarti request sudah diterima provider dan
@@ -681,6 +827,7 @@ export async function runMonthlyDailyReminderCheck(): Promise<{ h7: number; h3: 
           messageType: "due_reminder",
           status: result.pending ? "queued" : "accepted",
           errorMessage: result.pending ? "CST WA Gateway queued" : null,
+          gatewayMessageId: result.pending ? gatewayMessageIdFromResult(result) : null,
         });
 
         if (result.pending) {
@@ -862,6 +1009,7 @@ export async function runOverdueCheck(): Promise<number> {
           messageType: "overdue_reminder",
           status: result.pending ? "queued" : "accepted",
           errorMessage: result.pending ? "CST WA Gateway queued" : null,
+          gatewayMessageId: result.pending ? gatewayMessageIdFromResult(result) : null,
         });
 
         if (result.pending) {

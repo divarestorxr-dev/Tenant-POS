@@ -4,6 +4,12 @@ import { tenantInvoicesTable, waLogsTable } from "@workspace/db/schema";
 import { eq, inArray } from "drizzle-orm";
 import { createTenant, createTestInvoice, cleanupTestData } from "./helpers/factory";
 
+vi.mock("../lib/whatsapp-gateway-client", () => ({
+  isTenantPosWaOnline: vi.fn().mockResolvedValue(true),
+  getTenantPosMessageStatus: vi.fn().mockResolvedValue("queued"),
+}));
+import { getTenantPosMessageStatus } from "../lib/whatsapp-gateway-client";
+
 vi.mock("../lib/whatsapp", () => ({
   sendInvoiceNotification: vi.fn().mockResolvedValue({ ok: true, skipped: false }),
   sendOverdueReminder: vi.fn().mockResolvedValue({ ok: true, skipped: false }),
@@ -13,7 +19,7 @@ vi.mock("../lib/whatsapp", () => ({
   notifyAdminGroup: vi.fn().mockResolvedValue({ ok: true, skipped: true }),
 }));
 
-import { runMonthlyDailyReminderCheck, runOverdueCheck } from "../lib/overdue-scheduler";
+import { runMonthlyDailyReminderCheck, runOverdueCheck, reconcileScheduledWaDeliveries } from "../lib/overdue-scheduler";
 import { sendDueReminder, sendOverdueReminder } from "../lib/whatsapp";
 
 describe("overdue invoice scheduler", () => {
@@ -115,6 +121,38 @@ describe("overdue invoice scheduler", () => {
 
     await runOverdueCheck();
     expect(eligibleCalls()).toHaveLength(1);
+  });
+
+  it("mengembalikan claim hanya untuk kegagalan gateway yang terkonfirmasi, bukan queued atau sent", async () => {
+    const tenant = await createTenant({ phone: "6281200000105", status: "active" });
+    tenantIds.push(tenant.id);
+    const invoice = await createTestInvoice(tenant.id, undefined, {
+      invoiceNumber: `INV-RECONCILE-${Date.now()}`,
+      periodStart: "2026-09-01", dueDate: "2026-09-01", status: "unpaid", outstandingAmount: "100000",
+    });
+    const gatewayId = "f13d3834-2222-4444-8888-bfef91969e10";
+    vi.mocked(sendOverdueReminder).mockResolvedValueOnce({
+      ok: true, pending: true, response: { status: "queued", messageId: gatewayId },
+    });
+    await runOverdueCheck();
+    const queued = await db.select().from(waLogsTable).where(eq(waLogsTable.invoiceId, invoice.id));
+    expect(queued.some(row => row.status === "queued" && row.errorMessage === `gateway:${gatewayId}`)).toBe(true);
+    vi.mocked(getTenantPosMessageStatus).mockResolvedValueOnce("queued");
+    expect((await reconcileScheduledWaDeliveries()).failed).toBe(0);
+    let [unchanged] = await db.select().from(tenantInvoicesTable).where(eq(tenantInvoicesTable.id, invoice.id));
+    expect(unchanged.lastOverdueReminderAt).not.toBeNull();
+    vi.mocked(getTenantPosMessageStatus).mockResolvedValueOnce("failed");
+    expect((await reconcileScheduledWaDeliveries()).failed).toBeGreaterThanOrEqual(1);
+    [unchanged] = await db.select().from(tenantInvoicesTable).where(eq(tenantInvoicesTable.id, invoice.id));
+    expect(unchanged.lastOverdueReminderAt).toBeNull();
+    vi.mocked(sendOverdueReminder).mockResolvedValueOnce({ ok: true });
+    await runOverdueCheck();
+    const calls = vi.mocked(sendOverdueReminder).mock.calls.filter(([p])=>p.invoiceNumber===invoice.invoiceNumber);
+    expect(calls).toHaveLength(2);
+    // Payment state always wins: no recovery after invoice paid.
+    await db.update(tenantInvoicesTable).set({status:"paid",outstandingAmount:"0",lastOverdueReminderAt:null}).where(eq(tenantInvoicesTable.id, invoice.id));
+    await runOverdueCheck();
+    expect(vi.mocked(sendOverdueReminder).mock.calls.filter(([p])=>p.invoiceNumber===invoice.invoiceNumber)).toHaveLength(2);
   });
 
   it("mempertahankan claim dan menghitung queued sekali saat CST WA Gateway queued", async () => {
@@ -380,7 +418,9 @@ describe("overdue scheduler daily window guard", () => {
       const chain: any = {};
       chain.from = vi.fn(() => chain);
       chain.innerJoin = vi.fn(() => chain);
-      chain.where = vi.fn().mockResolvedValue([]);
+      const empty: any = Promise.resolve([]);
+      empty.orderBy = () => ({ limit: async () => [] });
+      chain.where = vi.fn(() => empty);
       return chain;
     });
 
@@ -402,20 +442,20 @@ describe("overdue scheduler daily window guard", () => {
     // Tick pertama di 01:05 UTC memulai blast untuk window 2026-09-20-01.
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     expect(
-      scheduler.getBlastHistory().filter((run) => run.label === "cron 1:00 UTC"),
+      scheduler.getBlastHistory().filter((run) => run.label.startsWith("cron/catch-up")),
     ).toHaveLength(1);
 
     // Tick kedua masih pada jam UTC yang sama; tidak boleh blast lagi.
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     expect(
-      scheduler.getBlastHistory().filter((run) => run.label === "cron 1:00 UTC"),
+      scheduler.getBlastHistory().filter((run) => run.label.startsWith("cron/catch-up")),
     ).toHaveLength(1);
 
     // Pindah ke window hari berikutnya pada jam UTC yang sama.
     vi.setSystemTime(new Date("2026-09-21T01:00:00.000Z"));
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     expect(
-      scheduler.getBlastHistory().filter((run) => run.label === "cron 1:00 UTC"),
+      scheduler.getBlastHistory().filter((run) => run.label.startsWith("cron/catch-up")),
     ).toHaveLength(2);
   });
 });

@@ -321,6 +321,44 @@ export async function sendGatewayMedia(
   );
 }
 
+/** Status khusus device yang ditetapkan untuk Tenant POS, bukan status global gateway. */
+export async function isTenantPosWaOnline(): Promise<boolean> {
+  if (!isCstWaGatewayConfigured()) return false;
+  try {
+    const res = await gatewayFetch("/v1/devices", { method: "GET" });
+    if (!res.ok) return false;
+    const payload = (await res.json()) as { devices?: Array<{ deviceId?: string; status?: string; enabled?: boolean; lastHeartbeatAt?: string | null }> };
+    const id = gatewayDeviceId() ?? "tenant-pos";
+    const device = payload.devices?.find((d) => d.deviceId === id);
+    if (!device || !device.enabled || device.status?.toUpperCase() !== "ONLINE") return false;
+    if (!device.lastHeartbeatAt) return false;
+    const lastSeen = Date.parse(device.lastHeartbeatAt);
+    return Number.isFinite(lastSeen) && Date.now() - lastSeen < 90_000 && Date.now() >= lastSeen - 30_000;
+  } catch (error) {
+    logger.warn({ err: error }, "[wa-gateway] gagal membaca device Tenant POS");
+    return false;
+  }
+}
+
+export type GatewayMessageDeliveryStatus = "queued" | "processing" | "sent" | "delivered" | "read" | "failed" | "unknown";
+
+/** Read-only; never infer SENT from a queued/accepted response. */
+export async function getTenantPosMessageStatus(messageId: string): Promise<GatewayMessageDeliveryStatus> {
+  if (!isCstWaGatewayConfigured() || !/^[0-9a-f-]{16,64}$/i.test(messageId)) return "unknown";
+  try {
+    const res = await gatewayFetch(`/v1/messages/${encodeURIComponent(messageId)}`, { method: "GET" });
+    if (!res.ok) return "unknown";
+    const value = String(((await res.json()) as { status?: string }).status ?? "").toLowerCase();
+    if (["queued", "processing", "sent", "delivered", "read", "failed"].includes(value)) {
+      return value as GatewayMessageDeliveryStatus;
+    }
+    return "unknown";
+  } catch (error) {
+    logger.warn({ err: error, messageId }, "[wa-gateway] gagal memeriksa delivery");
+    return "unknown";
+  }
+}
+
 export async function getCstWaGatewayStatus(): Promise<GatewayStatus> {
   const configured = isCstWaGatewayConfigured();
   try {
